@@ -111,7 +111,7 @@ async function getTenderLine(bundle: DocBundle, tenderLineId: string | null): Pr
   return data ? normalizeLine(data) : null;
 }
 
-export type EditInput = { field: string; value: unknown; force?: boolean; reason?: string | null };
+export type EditInput = { field: string; value: unknown; force?: boolean; reason?: string | null; restore?: boolean };
 
 export async function applyEdit(documentId: string, lineId: string, input: EditInput): Promise<EditResult> {
   const bundle = await loadDoc(documentId);
@@ -132,6 +132,18 @@ export async function applyEdit(documentId: string, lineId: string, input: EditI
       if (!Number.isFinite(v)) return { ok: false, error: "That isn't a number." };
     }
     const m = meta[field];
+    if (input.restore) {
+      // put back what the document said and drop all provenance for this cell
+      const orig = m?.original;
+      rec[field] = orig == null || orig === "" ? null : Number(orig);
+      delete meta[field];
+      if (line.converted && (field === "quantity" || field === "rate")) line.converted = null;
+      recompute(bundle.lines, bundle.doc.field_rules, { primaryVariant: bundle.doc.primary_variant, cause: "recalc" });
+      syncPrimaryPrice(line, bundle.doc.primary_variant);
+      await recomputeAnomalies(bundle);
+      const done = await persist(bundle, before, beforeLines, "restore", input.reason ?? null);
+      return { ok: true, lines: bundle.lines.filter((l) => done.changed.includes(l.id)), changed: done.changed, notices, seq: done.seq };
+    }
     if (m?.formula && !input.force && m.src !== "converted") {
       return { ok: false, error: "formula", conflict: { kind: "formula_override", field, formula: m.formula, message: `${field[0].toUpperCase() + field.slice(1)} is calculated as ${describeFormula(m.formula)}. Typing a value will replace the formula for this row.` } };
     }

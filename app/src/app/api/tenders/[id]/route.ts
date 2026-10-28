@@ -33,3 +33,15 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/tenders/[i
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ tender: data });
 }
+
+export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/tenders/[id]">) {
+  const { id } = await ctx.params;
+  const { data: docs } = await db.from("documents").select("storage_path").eq("tender_id", id);
+  const { data: imgs } = await db.from("document_images").select("storage_path").eq("tender_id", id);
+  if (docs?.length) await db.storage.from("tender-files").remove(docs.map((d) => d.storage_path));
+  if (imgs?.length) await db.storage.from("tender-images").remove(imgs.map((i) => i.storage_path));
+  await db.from("tenders").update({ requirements_doc_id: null }).eq("id", id);
+  const { error } = await db.from("tenders").delete().eq("id", id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
+}

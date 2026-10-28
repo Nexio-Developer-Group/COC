@@ -2,72 +2,52 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { refresh, send } from "@/lib/client/api";
+import { Button, Card, PageHeader, Spinner } from "@/components/ui";
+import UploadDialog from "@/components/UploadDialog";
 
 export default function NewTenderPage() {
   const router = useRouter();
-  const [title, setTitle] = useState("");
-  const [clientName, setClientName] = useState("");
-  const [location, setLocation] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({ title: "", client_name: "", location: "", currency: "INR" });
+  const [tenderId, setTenderId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
+  async function create(thenUpload: boolean) {
+    setBusy(true);
     setError(null);
-    const res = await fetch("/api/tenders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, client_name: clientName || undefined, location: location || undefined }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
-    if (!res.ok) {
-      setError(data.error ?? "Something went wrong");
-      return;
-    }
-    router.push(`/tenders/${data.tender.id}`);
+    const r = await send("/api/tenders", "POST", form);
+    setBusy(false);
+    if (!r.ok) return setError(r.data.error ?? "Could not create the tender");
+    refresh("/api/tenders");
+    if (thenUpload) setTenderId(r.data.tender.id);
+    else router.push(`/tenders/${r.data.tender.id}/requirements`);
   }
-
+  const field = (k: keyof typeof form, label: string, ph?: string, required?: boolean) => (
+    <label className="block">
+      <span className="text-xs font-medium text-brand-dark/60">{label}{required && " *"}</span>
+      <input value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} placeholder={ph} className="mt-1 w-full border border-line rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary/25 focus:border-brand-primary" />
+    </label>
+  );
   return (
-    <div className="max-w-lg">
-      <h1 className="text-2xl font-semibold text-brand-dark mb-6">New tender</h1>
-      <form onSubmit={handleSubmit} className="bg-white border border-brand-light rounded-lg p-6 space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-brand-dark mb-1">Title *</label>
-          <input
-            className="w-full border border-brand-light rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            placeholder="e.g. ITC Fortune Guwahati — Interior Works"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-brand-dark mb-1">Client name</label>
-          <input
-            className="w-full border border-brand-light rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-brand-dark mb-1">Location</label>
-          <input
-            className="w-full border border-brand-light rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-          />
-        </div>
+    <div className="max-w-xl">
+      <PageHeader title="New tender" subtitle="Give it a name, then upload the requirements (BOQ) — we’ll read every sheet." />
+      <Card className="p-6 space-y-4">
+        {field("title", "Tender name", "e.g. ITC Fortune Guwahati — interiors", true)}
+        <div className="grid grid-cols-2 gap-4">{field("client_name", "Client", "ITC")}{field("location", "Site / location", "Guwahati")}</div>
+        <label className="block w-40">
+          <span className="text-xs font-medium text-brand-dark/60">Currency</span>
+          <select value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} className="mt-1 w-full border border-line rounded-lg px-3 py-2.5 text-sm bg-white">
+            {["INR", "USD", "EUR", "GBP", "AED"].map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </label>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={submitting || !title}
-          className="bg-brand-primary hover:bg-brand-primary-dull disabled:opacity-50 text-white font-medium px-5 py-2.5 rounded-md"
-        >
-          {submitting ? "Creating…" : "Create tender"}
-        </button>
-      </form>
+        <div className="flex gap-2 pt-2">
+          <Button variant="primary" icon="upload" disabled={!form.title.trim() || busy} onClick={() => create(true)}>{busy ? <Spinner /> : null}Create & upload BOQ</Button>
+          <Button disabled={!form.title.trim() || busy} onClick={() => create(false)}>Create without a file</Button>
+        </div>
+      </Card>
+      {tenderId && <UploadDialog tenderId={tenderId} role="tender" open onClose={() => router.push(`/tenders/${tenderId}/requirements`)} onDone={() => refresh(`/api/tenders/${tenderId}`)} />}
     </div>
   );
 }

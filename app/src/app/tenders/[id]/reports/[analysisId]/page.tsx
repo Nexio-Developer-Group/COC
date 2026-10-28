@@ -1,60 +1,56 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import AnalysisResultView from "@/components/AnalysisResultView";
+import { useParams, useRouter } from "next/navigation";
+import { useState } from "react";
+import { refresh, send, useApi } from "@/lib/client/api";
 import type { Analysis } from "@/lib/types";
+import AnalysisResultView from "@/components/AnalysisResultView";
+import { PlaybookEditor } from "@/components/Playbooks";
+import { Button, ExportMenu, Menu, PageHeader, Pill, Spinner } from "@/components/ui";
+import Icon from "@/components/ui/Icon";
+import { useToast } from "@/components/ui/Toasts";
 
-export default function AnalysisReportPage() {
-  const params = useParams<{ id: string; analysisId: string }>();
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+export default function ReportPage() {
+  const { id, analysisId } = useParams<{ id: string; analysisId: string }>();
+  const router = useRouter();
+  const toast = useToast();
+  const { data, mutate } = useApi<{ analysis: Analysis }>(`/api/analyses/${analysisId}`, { refreshInterval: (d) => (d?.analysis.status === "running" ? 3000 : 0) });
+  const [save, setSave] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const a = data?.analysis;
+  if (!a) return <div className="py-20 text-center"><Spinner className="w-6 h-6" /></div>;
 
-  useEffect(() => {
-    fetch(`/api/analyses/${params.analysisId}`)
-      .then((r) => r.json())
-      .then((d) => setAnalysis(d.analysis));
-  }, [params.analysisId]);
-
-  if (!analysis) return <p className="text-brand-dark/60">Loading…</p>;
+  async function rerun() {
+    setRerunning(true);
+    const r = await send(`/api/tenders/${id}/analyses`, "POST", { request_text: a!.request_text, requested_type: a!.requested_type, force: true, playbook_id: a!.playbook_id, params: a!.params });
+    setRerunning(false);
+    if (!r.ok) return toast.push({ text: r.data.error ?? "Could not run again", tone: "bad" });
+    refresh(`/api/tenders/${id}/analyses`);
+    router.push(`/tenders/${id}/reports/${r.data.id}`);
+  }
 
   return (
     <div>
-      <Link href={`/tenders/${params.id}`} className="text-sm text-brand-primary hover:underline mb-4 inline-block">
-        ← Back to tender
-      </Link>
-
-      {analysis.status === "running" && <p className="text-brand-dark/60">Still running…</p>}
-      {analysis.status === "failed" && (
-        <div className="border border-red-200 bg-red-50 text-red-800 rounded-md px-4 py-3 text-sm">
-          This analysis failed: {analysis.error}
-        </div>
-      )}
-      {analysis.status === "ready" && analysis.result && (
-        <div>
-          <div className="flex justify-end gap-2 mb-3">
-            {analysis.response_type === "narrative" ? (
-              <a href={`/api/analyses/${analysis.id}/export?format=md`} className="text-sm bg-brand-accent hover:bg-brand-accent-dull text-white px-3 py-1.5 rounded-md">
-                Export Markdown
-              </a>
-            ) : (
-              <>
-                <a
-                  href={`/api/analyses/${analysis.id}/export?format=xlsx`}
-                  className="text-sm bg-brand-accent hover:bg-brand-accent-dull text-white px-3 py-1.5 rounded-md"
-                >
-                  Export Excel
-                </a>
-                <a href={`/api/analyses/${analysis.id}/export?format=csv`} className="text-sm border border-brand-light text-brand-dark px-3 py-1.5 rounded-md">
-                  Export CSV
-                </a>
-              </>
-            )}
-          </div>
-          <p className="text-xs text-brand-dark/40 mb-3">Asked: &quot;{analysis.request_text}&quot;</p>
-          <AnalysisResultView result={analysis.result} />
-        </div>
-      )}
+      <PageHeader
+        back={<Link href={`/tenders/${id}/reports`} className="text-xs text-brand-dark/50 hover:text-brand-primary inline-flex items-center gap-1 mb-1"><Icon name="chevron" className="w-3 h-3 rotate-180" /> All reports</Link>}
+        title={a.title ?? "Report"}
+        subtitle={<><span>{a.description}</span><div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><Pill>{new Date(a.created_at).toLocaleString()}</Pill>{a.playbook_id && <Pill tone="accent">From a Playbook</Pill>}</div></>}
+        actions={a.status === "ready" ? <>
+          <Button icon="spark" onClick={() => setSave(true)}>Save as Playbook</Button>
+          <Button icon="undo" onClick={rerun} disabled={rerunning}>{rerunning ? <Spinner /> : null}Run again</Button>
+          <ExportMenu base={`/api/analyses/${a.id}/export`} extras={a.response_type === "narrative" ? [{ label: "Markdown text (.md)", icon: "file", href: `/api/analyses/${a.id}/export?format=md` }] : undefined} />
+          <Menu items={[
+            { label: "Rename", icon: "edit", onClick: async () => { const t = prompt("Report title", a.title ?? ""); if (t) { await send(`/api/analyses/${a.id}`, "PATCH", { title: t }); mutate(); refresh("/analyses"); } } },
+            { label: "Delete", icon: "trash", danger: true, onClick: async () => { if (confirm("Delete this report?")) { await send(`/api/analyses/${a.id}`, "DELETE"); refresh("/analyses"); router.push(`/tenders/${id}/reports`); } } },
+          ]} />
+        </> : undefined}
+      />
+      <p className="text-xs text-brand-dark/45 -mt-2 mb-4">You asked: “{a.request_text}”</p>
+      {a.status === "running" && <div className="py-10 text-center text-brand-dark/60"><Spinner className="w-6 h-6" /><div className="mt-2 text-sm">Still working on it…</div></div>}
+      {a.status === "failed" && <div className="border border-red-200 bg-red-50 text-red-800 rounded-xl px-4 py-3 text-sm flex items-center justify-between gap-3"><span>We couldn’t produce a reliable answer. {a.error?.slice(0, 160)}</span><Button onClick={rerun} disabled={rerunning}>Try again</Button></div>}
+      {a.status === "ready" && a.result && <AnalysisResultView result={a.result} analysisId={a.id} />}
+      <PlaybookEditor open={save} onClose={() => setSave(false)} initial={{ from_analysis_id: a.id, name: a.title ?? "", description: a.description ?? "", instruction: a.request_text, output_type: a.requested_type !== "auto" ? a.requested_type : a.response_type ?? "auto" }} />
     </div>
   );
 }

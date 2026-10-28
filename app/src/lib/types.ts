@@ -155,7 +155,7 @@ export type Playbook = {
 };
 
 export type UiSettings = {
-  colors?: Partial<Record<Source | "anomaly" | "low" | "high", string>>;
+  colors?: Partial<Record<"auto" | "converted" | "manual" | "ai" | "anomaly" | "low" | "high", string>>;
   showProvenance?: boolean;
 };
 

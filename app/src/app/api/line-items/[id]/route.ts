@@ -8,9 +8,9 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/line-items
   const { data: row } = await db.from("line_items").select("document_id").eq("id", id).single();
   if (!row) return NextResponse.json({ error: "Row not found" }, { status: 404 });
   // legacy shape: { tender_line_id } or { name } etc.
-  const field = body.field ?? Object.keys(body).find((k) => !["force", "reason", "value"].includes(k));
+  const field = body.field ?? Object.keys(body).find((k) => !["force", "reason", "value", "restore"].includes(k));
   const value = "field" in body ? body.value : body[field];
-  const result = await applyEdit(row.document_id, id, { field, value, force: !!body.force, reason: body.reason ?? null });
+  const result = await applyEdit(row.document_id, id, { field, value, force: !!body.force, reason: body.reason ?? null, restore: !!body.restore });
   if (!result.ok) return NextResponse.json({ error: result.error, conflict: result.conflict ?? null }, { status: result.conflict ? 409 : 400 });
   return NextResponse.json({ lines: result.lines, notices: result.notices, seq: result.seq });
 }

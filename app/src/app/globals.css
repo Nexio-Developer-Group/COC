@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8f9fa;
+  --background: #f5f3f0;
   --foreground: #212529;
 
   --color-primary: #e96a32;
-  --color-primary-dull: #f13b09;
+  --color-primary-dull: #d4501a;
   --color-dark: #212529;
   --color-dark-dull: #181b1e;
   --color-light: #edeae6;
@@ -14,6 +14,23 @@
   --color-accent-dull: #5c311e;
   --color-contrast: #17196d;
   --color-contrast-dull: #0a0c63;
+  --line: #e6e1da;
+
+  /* cell highlight colours — overridden per tender from Settings */
+  --c-auto: #e3ecfa;
+  --c-auto-fg: #1e3a8a;
+  --c-converted: #ddf3ef;
+  --c-converted-fg: #0f5f55;
+  --c-manual: #fff4cc;
+  --c-manual-fg: #7a5b00;
+  --c-ai: #efe7fa;
+  --c-ai-fg: #5b2d91;
+  --c-anomaly: #fbd5d5;
+  --c-anomaly-fg: #9b1c1c;
+  --c-low: #e4f2e7;
+  --c-low-fg: #1e6b34;
+  --c-high: #fbe3d7;
+  --c-high-fg: #9a3412;
 }
 
 @theme inline {
@@ -29,6 +46,7 @@
   --color-brand-accent-dull: var(--color-accent-dull);
   --color-brand-contrast: var(--color-contrast);
   --color-brand-contrast-dull: var(--color-contrast-dull);
+  --color-line: var(--line);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -36,5 +54,25 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ---- cell provenance styling ---- */
+.cell-auto { background: var(--c-auto); color: var(--c-auto-fg); }
+.cell-converted { background: var(--c-converted); color: var(--c-converted-fg); }
+.cell-manual { background: var(--c-manual); color: var(--c-manual-fg); }
+.cell-ai { background: var(--c-ai); color: var(--c-ai-fg); }
+.cell-anomaly { background: var(--c-anomaly); color: var(--c-anomaly-fg); text-decoration: underline wavy var(--c-anomaly-fg); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.cell-low { background: var(--c-low); color: var(--c-low-fg); font-weight: 600; }
+.cell-high { background: var(--c-high); color: var(--c-high-fg); }
+.hl-off .cell-auto, .hl-off .cell-converted, .hl-off .cell-manual, .hl-off .cell-ai { background: transparent; color: inherit; }
+
+.grid-cell { transition: background-color 0.35s ease; }
+.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0% { box-shadow: inset 0 0 0 2px var(--color-primary); background: #fff0e8; } 100% { box-shadow: inset 0 0 0 0 transparent; } }
+
+.scroll-thin::-webkit-scrollbar { height: 10px; width: 10px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: #d6cfc6; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+
+@media print { aside, .no-print { display: none !important; } main { margin: 0 !important; } }
