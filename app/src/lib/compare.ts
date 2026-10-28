@@ -8,6 +8,13 @@ export type ComparisonCell = {
   flags: string[];
   remarks: string | null;
   matchConfidence: string | null;
+  lineId?: string;
+  /** strongest non-document provenance on the rate/amount: autofill, converted or manual */
+  src?: "document" | "autofill" | "converted" | "manual";
+  anomalies?: string[];
+  converted?: string | null;
+  images?: number;
+  qtyMismatch?: boolean;
 };
 
 export type ComparisonItemRow = {
@@ -35,6 +42,11 @@ export type ComparisonBidSummary = {
   missingCount: number;
   issueCount: number;
   taxBasis: string | null;
+  taxRatePercent: number | null;
+  versionNo: number;
+  status: string;
+  imageCount: number;
+  terms: { category: string; text: string; value: string | null }[];
   rank: number;
 };
 
@@ -113,15 +125,19 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       .eq("kind", "item")
       .returns<LineItem[]>();
 
+    const { data: imgRows } = await db.from("document_images").select("line_item_id").eq("document_id", bidDoc.id);
+    const imgByLine = new Map<string, number>();
+    for (const r of imgRows ?? []) if (r.line_item_id) imgByLine.set(r.line_item_id, (imgByLine.get(r.line_item_id) ?? 0) + 1);
+
     let computedTotal = 0;
     let likeForLikeTotal = 0;
     let extrasTotal = 0;
     let notPricedCount = 0;
 
     for (const line of bidLines ?? []) {
-      if (line.amount != null) computedTotal += line.amount;
+      if (line.amount != null) computedTotal += Number(line.amount);
       if (!line.tender_line_id) {
-        extrasTotal += line.amount ?? 0;
+        extrasTotal += Number(line.amount ?? 0);
         extraItems.push({
           documentId: bidDoc.id,
           partyName: bidDoc.party_name,
@@ -136,8 +152,8 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       const row = itemByTenderLineId.get(line.tender_line_id);
       if (!row) continue;
 
-      const qtyMismatch = row.quantity != null && line.quantity != null && row.quantity !== 0 && Math.abs(line.quantity - row.quantity) / row.quantity > 0.005;
-      const amountNormalized = qtyMismatch && line.rate != null && row.quantity != null ? line.rate * row.quantity : line.amount;
+      const qtyMismatch = row.quantity != null && line.quantity != null && Number(row.quantity) !== 0 && Math.abs(Number(line.quantity) - Number(row.quantity)) / Number(row.quantity) > 0.005;
+      const amountNormalized = qtyMismatch && line.rate != null && row.quantity != null ? Number(line.rate) * Number(row.quantity) : line.amount == null ? null : Number(line.amount);
 
       const status: ComparisonCell["status"] =
         line.quote_status === "included"
@@ -150,13 +166,21 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       if (status === "not_priced") notPricedCount++;
       if (status === "priced" && amountNormalized != null) likeForLikeTotal += amountNormalized;
 
+      const metas = [line.cell_meta?.rate, line.cell_meta?.amount, line.cell_meta?.quantity];
+      const src = metas.some((m) => m?.src === "manual") ? "manual" : metas.some((m) => m?.src === "converted") ? "converted" : metas.some((m) => m?.src === "autofill") ? "autofill" : "document";
       row.cells[bidDoc.id] = {
         status,
-        rate: line.rate,
-        amount: amountNormalized ?? line.amount,
+        rate: line.rate == null ? null : Number(line.rate),
+        amount: amountNormalized == null ? line.amount : Number(amountNormalized),
         flags: line.flags,
         remarks: line.remarks,
         matchConfidence: line.match_confidence,
+        lineId: line.id,
+        src,
+        anomalies: (line.anomalies ?? []).map((a) => a.code),
+        converted: line.converted ? `${line.converted.from} → ${line.converted.to}` : null,
+        images: imgByLine.get(line.id) ?? 0,
+        qtyMismatch,
       };
     }
 
@@ -180,6 +204,11 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       missingCount,
       issueCount,
       taxBasis: bidDoc.tax_basis,
+      taxRatePercent: bidDoc.tax_rate_percent == null ? null : Number(bidDoc.tax_rate_percent),
+      versionNo: bidDoc.version_no ?? 1,
+      status: bidDoc.status,
+      imageCount: imgRows?.length ?? 0,
+      terms: bidDoc.terms ?? [],
       rank: 0,
     });
   }

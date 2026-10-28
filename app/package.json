@@ -11,6 +11,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
     "exceljs": "^4.4.0",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "mammoth": "^1.13.0",
     "next": "16.4.3",
     "pdf-parse": "^2.4.5",

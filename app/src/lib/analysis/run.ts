@@ -12,6 +12,8 @@ export async function runAnalysis(opts: {
   requestText: string;
   requestedType: "auto" | "table" | "ranking" | "narrative";
   templateKey?: string | null;
+  playbookId?: string | null;
+  params?: Record<string, string>;
   force?: boolean;
 }): Promise<{ id: string }> {
   const comparison = await buildComparison(opts.tenderId);
@@ -45,6 +47,8 @@ export async function runAnalysis(opts: {
       request_text: opts.requestText,
       requested_type: opts.requestedType,
       template_key: opts.templateKey ?? null,
+      playbook_id: opts.playbookId ?? null,
+      params: opts.params ?? {},
       status: "running",
       cache_key: cacheKey,
       input_snapshot: { bid_refs: factsPack.bidRefs, reductions: factsPack.reductions, prompt_version: PROMPT_VERSION },
