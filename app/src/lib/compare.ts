@@ -37,6 +37,10 @@ export type ComparisonBidSummary = {
   statedTotal: number | null;
   computedTotal: number;
   likeForLikeTotal: number;
+  /** how many BOQ items every bid priced (the basis of likeForLikeTotal) */
+  likeForLikeItems: number;
+  /** this bid's total over every item it priced, whatever the others did */
+  pricedTotal: number;
   extrasTotal: number;
   notPricedCount: number;
   missingCount: number;
@@ -130,7 +134,7 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
     for (const r of imgRows ?? []) if (r.line_item_id) imgByLine.set(r.line_item_id, (imgByLine.get(r.line_item_id) ?? 0) + 1);
 
     let computedTotal = 0;
-    let likeForLikeTotal = 0;
+    let pricedTotal = 0;
     let extrasTotal = 0;
     let notPricedCount = 0;
 
@@ -164,7 +168,7 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
           ? "priced"
           : "not_priced";
       if (status === "not_priced") notPricedCount++;
-      if (status === "priced" && amountNormalized != null) likeForLikeTotal += amountNormalized;
+      if (status === "priced" && amountNormalized != null) pricedTotal += amountNormalized;
 
       const metas = [line.cell_meta?.rate, line.cell_meta?.amount, line.cell_meta?.quantity];
       const src = metas.some((m) => m?.src === "manual") ? "manual" : metas.some((m) => m?.src === "converted") ? "converted" : metas.some((m) => m?.src === "autofill") ? "autofill" : "document";
@@ -198,7 +202,9 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       partyName: bidDoc.party_name,
       statedTotal: bidDoc.stated_total,
       computedTotal,
-      likeForLikeTotal,
+      likeForLikeTotal: 0,
+      likeForLikeItems: 0,
+      pricedTotal,
       extrasTotal,
       notPricedCount,
       missingCount,
@@ -211,6 +217,13 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       terms: bidDoc.terms ?? [],
       rank: 0,
     });
+  }
+
+  // Like-for-like = only the BOQ items EVERY bid priced, so a bid that skipped items can't look cheaper.
+  const common = items.filter((i) => bids.length > 0 && bids.every((b) => i.cells[b.documentId]?.status === "priced" && i.cells[b.documentId].amount != null));
+  for (const b of bids) {
+    b.likeForLikeItems = common.length;
+    b.likeForLikeTotal = common.length ? common.reduce((sum, i) => sum + (i.cells[b.documentId].amount ?? 0), 0) : b.pricedTotal;
   }
 
   // Rank by like-for-like total ascending (cheapest = L1); zero LFL (no priced items) ranks last.

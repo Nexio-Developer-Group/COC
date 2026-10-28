@@ -33,8 +33,8 @@ export function buildFactsPack(comparison: Comparison, requestText: string): Fac
 
   const bidsBlock = [
     "BIDS",
-    "ref | contractor | stated_total | like_for_like_total | computed_total | extras_total | not_priced | missing | issues | rank",
-    ...sortedBids.map((b) => `${ref(b.documentId)} | ${b.partyName ?? "Unknown"} | ${b.statedTotal ?? "—"} | ${Math.round(b.likeForLikeTotal)} | ${Math.round(b.computedTotal)} | ${Math.round(b.extrasTotal)} | ${b.notPricedCount} | ${b.missingCount} | ${b.issueCount} | L${b.rank}`),
+    "ref | contractor | stated_total | like_for_like_total (common items) | everything_it_priced | computed_total | extras_total | not_priced | missing | issues | rank",
+    ...sortedBids.map((b) => `${ref(b.documentId)} | ${b.partyName ?? "Unknown"} | ${b.statedTotal ?? "—"} | ${Math.round(b.likeForLikeTotal)} | ${Math.round(b.pricedTotal)} | ${Math.round(b.computedTotal)} | ${Math.round(b.extrasTotal)} | ${b.notPricedCount} | ${b.missingCount} | ${b.issueCount} | L${b.rank}`),
   ];
   const taxBlock = [
     "TAX & COMMERCIAL FACTS (as stated by each bidder)",

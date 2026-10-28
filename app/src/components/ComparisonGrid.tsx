@@ -124,6 +124,8 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
           <tfoot>
             <Foot label="Quoted total (as printed)" bids={bids} f={(b) => formatINR(b.statedTotal, cur)} />
             <Foot label="Like-for-like total" strong bids={bids} f={(b) => formatINR(b.likeForLikeTotal, cur)} hint="Only items every contractor priced — fair to compare" />
+            <Foot label="…over how many items" bids={bids} f={(b) => (b.likeForLikeItems ? `${b.likeForLikeItems} items` : "all priced items")} />
+            <Foot label="Everything this bid priced" bids={bids} f={(b) => formatINR(b.pricedTotal, cur)} />
             <Foot label="Rank" bids={bids} f={(b) => `L${b.rank}`} />
             <Foot label="Not priced / missing" bids={bids} f={(b) => `${b.notPricedCount} / ${b.missingCount}`} />
             <Foot label="Tax" bids={bids} f={(b) => (b.taxBasis && b.taxBasis !== "unknown" ? `${b.taxBasis}${b.taxRatePercent ? ` · ${b.taxRatePercent}%` : ""}` : "not stated")} />
