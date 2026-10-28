@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { useApi } from "@/lib/client/api";
+import { refresh, useApi } from "@/lib/client/api";
 import DocumentView from "@/components/DocumentView";
 import UploadDialog from "@/components/UploadDialog";
 import { Button, EmptyState, PageHeader, Spinner } from "@/components/ui";
@@ -21,7 +21,7 @@ export default function RequirementsPage() {
       ) : (
         <DocumentView tenderId={id} documentId={reqId} role="tender" />
       )}
-      {upload && <UploadDialog tenderId={id} role="tender" open onClose={() => setUpload(false)} onDone={() => location.reload()} />}
+      {upload && <UploadDialog tenderId={id} role="tender" open onClose={() => setUpload(false)} onDone={() => refresh(`/api/tenders/${id}`)} />}
     </div>
   );
 }

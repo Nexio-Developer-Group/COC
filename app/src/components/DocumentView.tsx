@@ -100,7 +100,7 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
             <Icon name="warn" className="w-5 h-5 mt-0.5 text-amber-600" />
             <div>
               <b>Please review before this counts as ready.</b>
-              <div className="text-amber-900/80">{unresolved.length} thing{unresolved.length === 1 ? "" : "s"} to look at{warnCount ? ` (${warnCount} warning${warnCount > 1 ? "s" : ""})` : ""} — values we filled in, unit conversions, and numbers that look unrealistic are highlighted in the table.</div>
+              <div className="text-amber-900/80">{unresolved.length === 0 ? "Nothing was flagged — glance through the table, then confirm." : `${unresolved.length} thing${unresolved.length === 1 ? "" : "s"} to look at${warnCount ? ` (${warnCount} warning${warnCount > 1 ? "s" : ""})` : ""} — values we filled in, unit conversions, and numbers that look unrealistic are highlighted in the table.`}</div>
             </div>
           </div>
           <Button variant="primary" icon="check" onClick={() => setReviewOpen(true)}>Review & confirm</Button>
@@ -215,7 +215,7 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
       <ReviewPanel documentId={documentId} issues={data.review.issues} status={doc.status} open={reviewOpen} onClose={() => setReviewOpen(false)} onChanged={changed} onJump={(id) => { setFocusId(id); setTimeout(() => setFocusId(null), 2000); }} onRetryFailed={() => retry(true)} />
       <HistoryDrawer documentId={documentId} lineId={null} open={historyOpen} onClose={() => setHistoryOpen(false)} onReverted={changed} />
       {role === "bid" && (
-        <UploadDialog tenderId={tenderId} role="bid" open={uploadOpen} onClose={() => setUploadOpen(false)} replace={{ id: documentId, partyName: doc.party_name }} onDone={(ids) => { refresh(`/api/tenders/${tenderId}`); if (ids[0]) location.href = `/tenders/${tenderId}/bids/${ids[0]}`; }} />
+        <UploadDialog tenderId={tenderId} role="bid" open={uploadOpen} onClose={() => setUploadOpen(false)} replace={{ id: documentId, partyName: doc.party_name }} onDone={() => { refresh(`/api/tenders/${tenderId}`, "/documents"); }} />
       )}
       <Modal open={versionsOpen} onClose={() => setVersionsOpen(false)} title="Submission versions" footer={<Button onClick={() => setVersionsOpen(false)}>Close</Button>}>
         <ul className="space-y-2">
