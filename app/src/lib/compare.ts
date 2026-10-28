@@ -173,7 +173,7 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       const metas = [line.cell_meta?.rate, line.cell_meta?.amount, line.cell_meta?.quantity];
       const src = metas.some((m) => m?.src === "manual") ? "manual" : metas.some((m) => m?.src === "converted") ? "converted" : metas.some((m) => m?.src === "autofill") ? "autofill" : "document";
       const earlier = row.cells[bidDoc.id];
-      if (earlier && earlier.status === "priced" && status === "priced") {
+      if (earlier && earlier.status === "priced" && status === "priced" && (amountNormalized ?? 0) > 0) {
         // a continuation line on the same BOQ item: add the amounts, show the effective rate
         earlier.amount = (earlier.amount ?? 0) + (amountNormalized ?? 0);
         earlier.rate = row.quantity ? earlier.amount / Number(row.quantity) : earlier.rate;
