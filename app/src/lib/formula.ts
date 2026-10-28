@@ -254,11 +254,11 @@ export function describeFormula(src: string, thisCode?: string): string {
 }
 
 /** Validates syntax + that the formula never references its own target cell in a cycle (same row only). */
-export function validateFormula(src: string, target: NumericField): { ok: true; refs: CellRef[] } | { ok: false; error: string } {
+export function validateFormula(src: string, target: NumericField, selfCode?: string): { ok: true; refs: CellRef[] } | { ok: false; error: string } {
   try {
     const ast = parseFormula(src);
     const refs = collectRefs(ast);
-    if (refs.some((r) => r.row === null && r.field === target)) {
+    if (refs.some((r) => (r.row === null || (selfCode && r.row === selfCode)) && r.field === target)) {
       return { ok: false, error: `A formula for ${FIELD_LABEL[target]} can't use ${FIELD_LABEL[target]} of the same row (circular).` };
     }
     return { ok: true, refs };

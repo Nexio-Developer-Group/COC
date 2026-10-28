@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "@/lib/client/api";
 import type { Document, Tender } from "@/lib/types";
 import Icon from "./ui/Icon";
@@ -113,6 +113,11 @@ function useThemeVars(): { style: React.CSSProperties; hlOff: boolean } {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const theme = useThemeVars();
+  useEffect(() => {
+    const close = (e: MouseEvent) => document.querySelectorAll("details[open]").forEach((d) => !d.contains(e.target as Node) && d.removeAttribute("open"));
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, []);
   return (
     <ToastProvider>
       <div className="min-h-screen lg:flex">

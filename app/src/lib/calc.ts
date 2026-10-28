@@ -19,6 +19,13 @@ const DEFAULT_EXPR: Record<NumericField, string> = {
 };
 
 export const round4 = (n: number) => Math.round(n * 10000) / 10000;
+const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+
+export class CircularFormulaError extends Error {
+  constructor(public codes: string[]) {
+    super(`These formulas keep changing each other in a loop (${codes.slice(0, 4).join(", ")}). Change one so it doesn't depend on the other.`);
+  }
+}
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 4 }).format(n);
 
@@ -71,8 +78,11 @@ export function recompute(
   const byCode = new Map(items.map((l) => [l.item_code, l]));
   const changes: CellChange[] = [];
   const cause = opts.cause ?? "autofill";
+  const snapshot = items.map((l) => JSON.stringify([l.quantity, l.rate, l.amount, l.cell_meta, l.quote_status, l.prices]));
+  const touched = new Set<string>();
 
-  for (let pass = 0; pass < 8; pass++) {
+  let settled = false;
+  for (let pass = 0; pass < 30; pass++) {
     let moved = false;
     for (const line of items) {
       if (opts.only && !opts.only.has(line.id)) continue;
@@ -129,6 +139,7 @@ export function recompute(
         line.cell_meta = { ...(line.cell_meta ?? {}), [field]: newMeta };
         syncPrices(line, opts.primaryVariant ?? null);
         changes.push({ lineId: line.id, itemCode: line.item_code, field, oldValue: before, newValue: result, oldMeta, newMeta, cause });
+        touched.add(line.item_code);
         moved = true;
       }
 
@@ -144,7 +155,18 @@ export function recompute(
         moved = true;
       }
     }
-    if (!moved) break;
+    if (!moved) {
+      settled = true;
+      break;
+    }
+  }
+  if (!settled) {
+    // never keep half-iterated numbers: put everything back and tell the caller
+    items.forEach((l, i) => {
+      const [q, r, a, m, st, pr] = JSON.parse(snapshot[i]);
+      l.quantity = q; l.rate = r; l.amount = a; l.cell_meta = m; l.quote_status = st; l.prices = pr;
+    });
+    throw new CircularFormulaError([...touched]);
   }
   return changes;
 }
@@ -203,7 +225,9 @@ export function applyUnitConversion(line: LineItem, tenderLine: Pick<LineItem, "
   const r = numeric(line, "rate");
   const changes: CellChange[] = [];
   const stamp = now();
-  line.converted = { from: conv.from, to: conv.to, factor: conv.factor, original_quantity: q, original_rate: r };
+  line.converted = { from: conv.from, to: conv.to, factor: conv.factor, original_quantity: q, original_rate: r, original_prices: JSON.parse(JSON.stringify(line.prices ?? [])) };
+  // every price option is quoted per the old unit, so convert them all (amounts stay the same)
+  line.prices = (line.prices ?? []).map((pr) => ({ ...pr, rate: pr.rate == null ? null : round6(pr.rate / conv.factor) }));
 
   const oldUnitMeta = line.cell_meta?.unit_raw ?? null;
   const oldUnit = line.unit;
@@ -215,14 +239,14 @@ export function applyUnitConversion(line: LineItem, tenderLine: Pick<LineItem, "
   changes.push({ lineId: line.id, itemCode: line.item_code, field: "unit", oldValue: oldUnit, newValue: conv.to, oldMeta: oldUnitMeta, newMeta: line.cell_meta.unit_raw!, cause: "conversion" });
 
   if (q != null) {
-    const nq = round4(q * conv.factor);
+    const nq = round6(q * conv.factor);
     const oldMeta = line.cell_meta?.quantity ?? null;
     line.quantity = nq;
     line.cell_meta = { ...line.cell_meta, quantity: { src: "converted", formula: `${fmt(q)} × ${fmt(conv.factor)}`, original: q, note: `${fmt(q)} ${conv.from} → ${fmt(nq)} ${conv.to}`, at: stamp } };
     changes.push({ lineId: line.id, itemCode: line.item_code, field: "quantity", oldValue: q, newValue: nq, oldMeta, newMeta: line.cell_meta.quantity!, cause: "conversion" });
   }
   if (r != null) {
-    const nr = round4(r / conv.factor);
+    const nr = round6(r / conv.factor);
     const oldMeta = line.cell_meta?.rate ?? null;
     line.rate = nr;
     line.cell_meta = { ...line.cell_meta, rate: { src: "converted", formula: `${fmt(r)} ÷ ${fmt(conv.factor)}`, original: r, note: `${fmt(r)} per ${conv.from} → ${fmt(nr)} per ${conv.to}`, at: stamp } };
@@ -246,6 +270,7 @@ export function revertUnitConversion(line: LineItem): CellChange[] {
   };
   restore("quantity", c.original_quantity);
   restore("rate", c.original_rate);
+  if (c.original_prices) line.prices = c.original_prices;
   const oldUnit = line.unit;
   line.unit = normalizeUnit(line.unit_raw);
   const { unit_raw: _u, ...rest } = line.cell_meta ?? {};

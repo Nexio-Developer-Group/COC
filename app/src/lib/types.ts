@@ -183,7 +183,7 @@ export type LineItem = {
   extraction_confidence: "high" | "low" | null;
   cell_meta: CellMetaMap;
   anomalies: Anomaly[];
-  converted: { from: string; to: string; factor: number; original_quantity: number | null; original_rate: number | null } | null;
+  converted: { from: string; to: string; factor: number; original_quantity: number | null; original_rate: number | null; original_prices?: Price[] } | null;
   sheet_name: string | null;
   source_row: number | null;
   edited_at: string | null;

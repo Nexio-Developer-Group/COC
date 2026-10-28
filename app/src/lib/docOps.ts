@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { applyUnitConversion, checkPlausibility, previewFormula, recompute, revertUnitConversion, unitMedians, type FormulaPreviewRow } from "@/lib/calc";
+import { applyUnitConversion, checkPlausibility, CircularFormulaError, previewFormula, recompute, revertUnitConversion, unitMedians, type FormulaPreviewRow } from "@/lib/calc";
 import { describeFormula, evaluate, parseFormula, validateFormula, type NumericField } from "@/lib/formula";
 import { normalizeUnit } from "@/lib/units";
 import type { CellMeta, Document, LineItem } from "@/lib/types";
@@ -83,7 +83,7 @@ async function persist(bundle: DocBundle, before: Map<string, string>, beforeLin
     const patch: Record<string, unknown> = { edited_at: stamp };
     for (const k of TRACKED) patch[k] = (l as unknown as Record<string, unknown>)[k] ?? (k === "flags" ? [] : null);
     await db.from("line_items").update(patch).eq("id", l.id);
-    for (const f of ["name", "description", "unit_raw", "quantity", "rate", "amount", "remarks", "quote_status", "flags", "tender_line_id", "trade"] as const) {
+    for (const f of ["name", "description", "unit_raw", "unit", "converted", "prices", "quantity", "rate", "amount", "remarks", "quote_status", "flags", "tender_line_id", "trade"] as const) {
       const ov = (old as unknown as Record<string, unknown>)[f] ?? null;
       const nv = (l as unknown as Record<string, unknown>)[f] ?? null;
       const om = (old.cell_meta as Record<string, CellMeta | undefined>)[f] ?? null;
@@ -114,7 +114,7 @@ async function getTenderLine(bundle: DocBundle, tenderLineId: string | null): Pr
 
 export type EditInput = { field: string; value: unknown; force?: boolean; reason?: string | null; restore?: boolean };
 
-export async function applyEdit(documentId: string, lineId: string, input: EditInput): Promise<EditResult> {
+async function _applyEdit(documentId: string, lineId: string, input: EditInput): Promise<EditResult> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return { ok: false, error: "Document not found" };
   const line = bundle.lines.find((l) => l.id === lineId);
@@ -134,11 +134,14 @@ export async function applyEdit(documentId: string, lineId: string, input: EditI
     }
     const m = meta[field];
     if (input.restore) {
-      // put back what the document said and drop all provenance for this cell
-      const orig = m?.original;
-      rec[field] = orig == null || orig === "" ? null : Number(orig);
-      delete meta[field];
-      if (line.converted && (field === "quantity" || field === "rate")) line.converted = null;
+      if (m?.src === "converted" && line.converted) {
+        // quantity, rate, unit and price options were converted together — undo them together
+        revertUnitConversion(line);
+      } else {
+        const orig = m?.original;
+        rec[field] = orig == null || orig === "" ? null : Number(orig);
+        delete meta[field];
+      }
       recompute(bundle.lines, bundle.doc.field_rules, { primaryVariant: bundle.doc.primary_variant, cause: "recalc" });
       syncPrimaryPrice(line, bundle.doc.primary_variant);
       await recomputeAnomalies(bundle);
@@ -208,7 +211,7 @@ export type FormulaInput = {
   saveAsRule?: boolean;
 };
 
-export async function applyFormula(documentId: string, input: FormulaInput): Promise<{ ok: true; rows?: FormulaPreviewRow[]; lines?: LineItem[]; changed?: string[]; skipped?: string[]; seq?: number } | { ok: false; error: string }> {
+async function _applyFormula(documentId: string, input: FormulaInput): Promise<{ ok: true; rows?: FormulaPreviewRow[]; lines?: LineItem[]; changed?: string[]; skipped?: string[]; seq?: number } | { ok: false; error: string }> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return { ok: false, error: "Document not found" };
   const items = bundle.lines.filter((l) => l.kind === "item");
@@ -229,7 +232,7 @@ export async function applyFormula(documentId: string, input: FormulaInput): Pro
     return { ok: true, lines: bundle.lines.filter((l) => changed.includes(l.id)), changed, seq };
   }
 
-  const v = validateFormula(input.expr, input.field);
+  const v = validateFormula(input.expr, input.field, input.scope === "cell" ? targets[0]?.item_code : undefined);
   if (!v.ok) return { ok: false, error: v.error };
   const preview = previewFormula(bundle.lines, input.field, input.expr, targetIds);
   if (!preview.ok) return preview;
@@ -269,13 +272,29 @@ export async function applyFormula(documentId: string, input: FormulaInput): Pro
 }
 
 /** Undo a whole user action (everything logged under one sequence number). */
-export async function revertSeq(documentId: string, seq: number): Promise<EditResult> {
+async function _revertSeq(documentId: string, seq: number): Promise<EditResult> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return { ok: false, error: "Document not found" };
   const { data: edits } = await db.from("line_item_edits").select("*").eq("document_id", documentId).eq("seq", seq);
   if (!edits?.length) return { ok: false, error: "Nothing to undo for that change." };
   const { before, beforeLines } = begin(bundle);
+  const unitLogged = new Set(edits.filter((e) => e.field === "unit").map((e) => e.line_item_id));
   for (const e of edits) {
+    if (e.field === "row") {
+      if (e.cause === "add_row" && e.line_item_id) {
+        await db.from("line_items").delete().eq("id", e.line_item_id);
+        bundle.lines = bundle.lines.filter((l) => l.id !== e.line_item_id);
+      } else if (e.cause === "delete_row" && e.old_value && typeof e.old_value === "object") {
+        const snap = e.old_value as LineItem;
+        if (!bundle.lines.some((l) => l.id === snap.id)) {
+          const { error } = await db.from("line_items").insert(snap);
+          if (error) return { ok: false, error: `Could not bring the row back: ${error.message}` };
+          bundle.lines.push(normalizeLine(snap));
+          bundle.lines.sort((a, b) => a.position - b.position);
+        }
+      }
+      continue;
+    }
     const line = bundle.lines.find((l) => l.id === e.line_item_id);
     if (!line) continue;
     (line as unknown as Record<string, unknown>)[e.field] = e.old_value;
@@ -283,20 +302,24 @@ export async function revertSeq(documentId: string, seq: number): Promise<EditRe
     if (e.old_meta) meta[e.field] = e.old_meta;
     else delete meta[e.field];
     line.cell_meta = meta;
-    if (e.field === "unit_raw") line.unit = normalizeUnit(e.old_value as string | null);
+    if (e.field === "unit_raw" && !unitLogged.has(e.line_item_id)) line.unit = normalizeUnit(e.old_value as string | null);
   }
   await recomputeAnomalies(bundle);
   const { changed, seq: newSeq } = await persist(bundle, before, beforeLines, "revert", `Undid change #${seq}`);
   return { ok: true, lines: bundle.lines.filter((l) => changed.includes(l.id)), changed, notices: [], seq: newSeq };
 }
 
-export async function addLine(documentId: string, input: { sectionId: string; afterLineId?: string | null; values: Partial<Pick<LineItem, "name" | "description" | "unit_raw" | "quantity" | "rate" | "amount" | "remarks">> }): Promise<EditResult> {
+async function _addLine(documentId: string, input: { sectionId: string; afterLineId?: string | null; values: Partial<Pick<LineItem, "name" | "description" | "unit_raw" | "quantity" | "rate" | "amount" | "remarks">> }): Promise<EditResult> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return { ok: false, error: "Document not found" };
   const section = bundle.lines.find((l) => l.id === input.sectionId && l.kind === "section");
   if (!section) return { ok: false, error: "Section not found" };
   const siblings = bundle.lines.filter((l) => l.parent_id === section.id);
-  const maxN = siblings.reduce((m, l) => Math.max(m, Number(l.item_code.split(".").pop()) || 0), 0);
+  const { data: pastCodes } = await db.from("line_item_edits").select("item_code").eq("document_id", documentId).like("item_code", `${section.item_code}.%`);
+  const maxN = Math.max(
+    siblings.reduce((m, l) => Math.max(m, Number(l.item_code.split(".").pop()) || 0), 0),
+    ...(pastCodes ?? []).map((r) => Number(String(r.item_code).split(".").pop()) || 0)
+  );
   const id = crypto.randomUUID();
   const after = input.afterLineId ? bundle.lines.find((l) => l.id === input.afterLineId) : siblings[siblings.length - 1] ?? section;
   const position = (after?.position ?? section.position) + 1;
@@ -324,7 +347,7 @@ export async function addLine(documentId: string, input: { sectionId: string; af
   return { ok: true, lines: fresh.lines, changed: [id, ...changed], notices: [], seq };
 }
 
-export async function deleteLine(documentId: string, lineId: string): Promise<EditResult> {
+async function _deleteLine(documentId: string, lineId: string): Promise<EditResult> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return { ok: false, error: "Document not found" };
   const line = bundle.lines.find((l) => l.id === lineId);
@@ -346,7 +369,7 @@ export async function deleteLine(documentId: string, lineId: string): Promise<Ed
 }
 
 /** Switch the active price option; rewrites headline rate/amount from each row's prices. */
-export async function setPrimaryVariant(documentId: string, variant: string): Promise<void> {
+async function _setPrimaryVariant(documentId: string, variant: string): Promise<void> {
   const bundle = await loadDoc(documentId);
   if (!bundle) return;
   const { before, beforeLines } = begin(bundle);
@@ -355,10 +378,11 @@ export async function setPrimaryVariant(documentId: string, variant: string): Pr
     if (chosen) {
       l.rate = chosen.rate;
       l.amount = chosen.amount;
-      const { rate: _r, amount: _a, ...rest } = l.cell_meta;
-      void _r;
-      void _a;
-      l.cell_meta = rest;
+      const keep = (m?: CellMeta) => !!m && (!!m.formula || m.src === "converted");
+      const meta = { ...l.cell_meta } as Record<string, CellMeta | undefined>;
+      if (!keep(meta.rate)) delete meta.rate;
+      if (!keep(meta.amount)) delete meta.amount;
+      l.cell_meta = meta;
     }
   }
   bundle.doc.primary_variant = variant;
@@ -367,3 +391,21 @@ export async function setPrimaryVariant(documentId: string, variant: string): Pr
   await persist(bundle, before, beforeLines, "variant_switch", `Switched to price option ${variant}`);
   await db.from("documents").update({ primary_variant: variant }).eq("id", documentId);
 }
+
+// A formula loop is the one failure users can cause on purpose; report it instead of crashing.
+function guard<A extends unknown[], R>(fn: (...a: A) => Promise<R>): (...a: A) => Promise<R | { ok: false; error: string; conflict?: Notice }> {
+  return async (...a: A) => {
+    try {
+      return await fn(...a);
+    } catch (e) {
+      if (e instanceof CircularFormulaError) return { ok: false, error: e.message };
+      throw e;
+    }
+  };
+}
+export const applyEdit = guard(_applyEdit);
+export const applyFormula = guard(_applyFormula);
+export const revertSeq = guard(_revertSeq);
+export const addLine = guard(_addLine);
+export const deleteLine = guard(_deleteLine);
+export const setPrimaryVariant = guard(_setPrimaryVariant);

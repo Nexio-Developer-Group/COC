@@ -33,7 +33,20 @@ eq(conversionFactor("sqm", "nos"), null, "no cross-dimension");
 eq(normalizeUnit("Sq. Ft."), "sqft", "norm sq ft");
 const bid = mk({ item_code: "2.1", quantity: 1000, rate: 100, amount: 100000, unit: "sqft", unit_raw: "sqft" });
 applyUnitConversion(bid, { unit: "sqm", unit_raw: "SQMT" });
-eq([bid.unit, bid.quantity, bid.rate, bid.amount], ["sqm", 92.903, 1076.391, 100000], "conversion keeps amount");
+eq([bid.unit, bid.quantity, bid.rate, bid.amount], ["sqm", 92.90304, 1076.391042, 100000], "conversion keeps amount");
 const an = checkPlausibility(mk({ item_code: "3", quantity: 10, rate: 90000, amount: 900000, unit: "sqm" }), { role: "bid", medianRate: 1000, tenderLine: { quantity: 10, rate: null, unit: "sqm" } });
 eq(an.map((x) => x.code), ["rate_outlier_high"], "outlier");
+// --- regressions from review ---
+import { CircularFormulaError, revertUnitConversion } from "../src/lib/calc";
+eq(validateFormula("[1.2].amount * 2", "amount", "1.2").ok, false, "self row code is circular");
+const loopA = mk({ item_code: "9.1", quantity: 1, rate: 1, amount: 10, cell_meta: { amount: { src: "manual", formula: "[9.2].amount * 2" } } });
+const loopB = mk({ item_code: "9.2", quantity: 1, rate: 1, amount: 5, cell_meta: { amount: { src: "manual", formula: "[9.1].amount + 1" } } });
+let threw = false;
+try { recompute([loopA, loopB], null); } catch (e) { threw = e instanceof CircularFormulaError; }
+eq([threw, loopA.amount, loopB.amount], [true, 10, 5], "cycle throws and leaves values untouched");
+const multi = mk({ item_code: "8.1", quantity: 1000, rate: 10, amount: 10000, unit: "sqft", unit_raw: "sqft", prices: [{ variant: "v1", rate: 10, amount: 10000 }, { variant: "v2", rate: 12, amount: 12000 }] });
+applyUnitConversion(multi, { unit: "sqm", unit_raw: "sqm" });
+eq(multi.prices.map((p) => p.rate), [107.639104, 129.166925], "all price options converted");
+revertUnitConversion(multi);
+eq([multi.unit, multi.quantity, multi.rate, multi.prices.map((p) => p.rate), multi.converted], ["sqft", 1000, 10, [10, 12], null], "revert restores everything");
 console.log(fails ? `${fails} FAILED` : "ALL PASS");

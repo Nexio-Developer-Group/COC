@@ -7,6 +7,7 @@ import { normalizeUnit } from "@/lib/units";
 import { matchAll, type MatchCandidate } from "@/lib/match";
 import { chunkSheet, expectedItemRows, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
+import { deriveVariants } from "./variants";
 import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
 
@@ -244,6 +245,7 @@ async function finalize(doc: Document): Promise<StepResult> {
   const terms: Extraction["terms"] = [];
   const variantLabels: Record<string, string> = {};
   const seenRows = new Set<string>();
+  const itemSheet = new Map<ExtractedItem, string>();
   for (const s of good) {
     const ex = s.raw_output!;
     header = header ?? ex.document;
@@ -276,6 +278,7 @@ async function finalize(doc: Document): Promise<StepResult> {
         seenRows.add(key);
         return true;
       });
+      for (const it of fresh) itemSheet.set(it, s.name);
       const last = merged[merged.length - 1];
       const norm = (n: string | null) => (n ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       const sameSheet = last && last.sheet.split(" (part")[0] === base;
@@ -285,6 +288,26 @@ async function finalize(doc: Document): Promise<StepResult> {
     });
   }
   header = header!;
+
+  // price options straight from the cells (rate columns paired with the amount that equals qty x rate)
+  const sheetText = new Map(sheets.map((x) => [x.name, (x as unknown as { rendered_text?: string }).rendered_text ?? ""]));
+  const vr = deriveVariants(merged.flatMap((m) => m.items.map((item) => ({ item, sheetText: sheetText.get(itemSheet.get(item) ?? m.sheet) ?? "" }))));
+  if (vr) {
+    for (const m of merged) for (const item of m.items) { const pr = vr.perItem.get(item); if (pr) item.prices = pr; }
+    Object.assign(variantLabels, vr.labels);
+  }
+
+  // nameless continuation rows ("237 rmt @ 1850" under item 8) add to the line above instead of becoming strays
+  for (const m of merged) {
+    m.items.forEach((item, i) => {
+      if (i > 0 && !item.name && !item.source_ref && (item.quantity != null || item.prices.some((p) => p.amount != null))) {
+        const parent = m.items[i - 1];
+        item.name = `${parent.name ?? "Item"} — additional line`;
+        (item as { tender_ref?: string | null }).tender_ref = (parent as { tender_ref?: string | null }).tender_ref ?? null;
+        (item.attributes as Record<string, unknown>).continuation_of = parent.source_ref ?? parent.name ?? "previous row";
+      }
+    });
+  }
 
   const flat: FlatItem[] = merged.flatMap((m, si) => m.items.map((item) => ({ item, sectionKey: si, sheetName: m.sheet })));
   const primaryVariant = pickPrimaryVariant(flat.map((f) => f.item));
@@ -299,7 +322,7 @@ async function finalize(doc: Document): Promise<StepResult> {
   const matches =
     doc.role === "bid" && candidates.length
       ? matchAll(
-          merged.flatMap((sec, si) => sec.items.map((item, ii) => ({ key: `${si}.${ii}`, source_ref: item.source_ref, name: item.name, description: item.description, unit: item.unit, quantity: item.quantity, section_name: sec.name, hint: item.tender_ref ?? null }))),
+          merged.flatMap((sec, si) => sec.items.filter((it) => !(it.attributes as Record<string, unknown>)?.continuation_of).map((item) => ({ item, ii: sec.items.indexOf(item) })).map(({ item, ii }) => ({ key: `${si}.${ii}`, source_ref: item.source_ref, name: item.name, description: item.description, unit: item.unit, quantity: item.quantity, section_name: sec.name, hint: item.tender_ref ?? null }))),
           candidates
         )
       : new Map();
@@ -320,11 +343,12 @@ async function finalize(doc: Document): Promise<StepResult> {
       let mc: LineItem["match_confidence"] = null;
       let mn: string | null = null;
       if (doc.role === "bid" && candidates.length) {
-        const m = matches.get(`${si}.${ii}`);
+        const isContinuation = !!(item.attributes as Record<string, unknown>)?.continuation_of;
+        const m = isContinuation ? matches.get(`${si}.${ii - 1}`) : matches.get(`${si}.${ii}`);
         tenderLineId = m?.tender_line_id ?? null;
         mm = m?.match_method ?? null;
         mc = m?.match_confidence ?? null;
-        mn = m?.match_note ?? null;
+        mn = isContinuation && tenderLineId ? "Additional line on the same BOQ item as the row above (amounts are added together)" : m?.match_note ?? null;
         if (!tenderLineId) issues.push({ code: "unmatched_bid_item", severity: "info", category: "match", message: `${si + 1}.${ii + 1} ${item.name ?? ""} doesn't match any BOQ item — shown as an extra item offered.` });
       }
       lines.push({
@@ -371,7 +395,10 @@ async function finalize(doc: Document): Promise<StepResult> {
   const pricedCount = itemLines.filter((l) => l.quote_status === "priced").length;
   if (priceVariants.length > 1) issues.push({ code: "multiple_price_variants", severity: "info", category: "ingest", message: `This document offers ${priceVariants.length} price options. Showing "${variantLabels[primaryVariant] ?? primaryVariant}" (lowest total) by default.` });
   const stated = header.stated_total;
-  if (stated != null && computedTotal > 0 && Math.abs(computedTotal - stated) / Math.max(stated, 1) > 0.005) {
+  const optionTotals = new Map<string, number>();
+  for (const l of itemLines) for (const pr of l.prices ?? []) if (pr.amount != null) optionTotals.set(pr.variant, (optionTotals.get(pr.variant) ?? 0) + Number(pr.amount));
+  const statedMatchesAnOption = stated != null && [...optionTotals.values()].some((t) => Math.abs(t - stated) / Math.max(stated, 1) <= 0.005);
+  if (stated != null && computedTotal > 0 && !statedMatchesAnOption && Math.abs(computedTotal - stated) / Math.max(stated, 1) > 0.005) {
     issues.push({ code: "total_mismatch", severity: "warn", category: "totals", message: `Printed grand total (${stated.toLocaleString("en-IN")}) doesn't match the sum of line amounts (${computedTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}).` });
   }
   if (header.detected_kind !== "unknown" && header.detected_kind !== doc.role) {
