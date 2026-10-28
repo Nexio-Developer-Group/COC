@@ -2,6 +2,10 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+/** Tokens-per-minute ceiling of the Groq tier in use (free on-demand tier = 8000 per request). */
+export const GROQ_TPM = Number(process.env.GROQ_TPM || 8000);
+export const estimateTokens = (text: string) => Math.ceil(text.length / 3.1);
+
 export class GroqJsonError extends Error {
   constructor(message: string, public raw?: string) {
     super(message);
@@ -48,7 +52,9 @@ export async function groqJsonCompletion<T = unknown>(
   const start = Date.now();
   let lastFinishReason: string | undefined;
   let lastUsage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
-  let currentMaxTokens = opts.maxCompletionTokens ?? 16000;
+  const promptEstimate = estimateTokens(messages.map((m) => m.content).join("\n"));
+  // Groq counts reserved output tokens against the per-minute limit, so never reserve more than fits.
+  let currentMaxTokens = Math.max(1000, Math.min(opts.maxCompletionTokens ?? 16000, GROQ_TPM - promptEstimate - 300));
 
   const doFetch = () =>
     fetch(GROQ_URL, {

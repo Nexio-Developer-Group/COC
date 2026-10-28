@@ -8,6 +8,7 @@ export const PriceSchema = z.object({
 
 export const ItemSchema = z.object({
   source_ref: z.string().nullable(),
+  source_row: z.number().nullable().optional(),
   name: z.string().nullable(),
   description: z.string().nullable(),
   unit: z.string().nullable(),
@@ -36,6 +37,7 @@ export const ItemSchema = z.object({
 export const SectionSchema = z.object({
   name: z.string().nullable(),
   source_ref: z.string().nullable(),
+  continues_previous_section: z.boolean().optional().default(false),
   trade: z.enum([
     "civil",
     "flooring",
@@ -93,6 +95,7 @@ export const ExtractionSchema = z.object({
     tax_rate_percent: z.number().nullable(),
     stated_total: z.number().nullable(),
     price_variant_labels: z.record(z.string(), z.string()).default({}),
+    sheet_kind: z.enum(["boq", "summary", "terms", "cover", "other"]).optional().default("boq"),
   }),
   sections: z.array(SectionSchema).default([]),
   terms: z.array(TermSchema).default([]),

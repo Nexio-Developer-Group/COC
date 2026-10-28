@@ -1,22 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { applyEdit, deleteLine } from "@/lib/docOps";
 
 export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/line-items/[id]">) {
   const { id } = await ctx.params;
   const body = await req.json();
-  const allowed: Record<string, unknown> = {};
+  const { data: row } = await db.from("line_items").select("document_id").eq("id", id).single();
+  if (!row) return NextResponse.json({ error: "Row not found" }, { status: 404 });
+  // legacy shape: { tender_line_id } or { name } etc.
+  const field = body.field ?? Object.keys(body).find((k) => !["force", "reason", "value"].includes(k));
+  const value = "field" in body ? body.value : body[field];
+  const result = await applyEdit(row.document_id, id, { field, value, force: !!body.force, reason: body.reason ?? null });
+  if (!result.ok) return NextResponse.json({ error: result.error, conflict: result.conflict ?? null }, { status: result.conflict ? 409 : 400 });
+  return NextResponse.json({ lines: result.lines, notices: result.notices, seq: result.seq });
+}
 
-  if ("tender_line_id" in body) {
-    allowed.tender_line_id = body.tender_line_id;
-    allowed.match_method = "manual";
-    allowed.match_confidence = body.tender_line_id ? "exact" : null;
-    allowed.match_note = body.tender_line_id ? "Manually linked by user" : null;
-  }
-  for (const key of ["name", "unit_raw", "quantity"]) {
-    if (key in body) allowed[key] = body[key];
-  }
-
-  const { data, error } = await db.from("line_items").update(allowed).eq("id", id).select().single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ lineItem: data });
+export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/line-items/[id]">) {
+  const { id } = await ctx.params;
+  const { data: row } = await db.from("line_items").select("document_id, kind").eq("id", id).single();
+  if (!row) return NextResponse.json({ error: "Row not found" }, { status: 404 });
+  if (row.kind !== "item") return NextResponse.json({ error: "Only item rows can be deleted here." }, { status: 400 });
+  const result = await deleteLine(row.document_id, id);
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ notices: result.notices, seq: result.seq });
 }

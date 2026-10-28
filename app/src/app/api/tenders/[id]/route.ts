@@ -26,7 +26,7 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/tenders/[i
   const { id } = await ctx.params;
   const body = await req.json();
   const allowed: Record<string, unknown> = {};
-  for (const key of ["title", "client_name", "location", "currency", "notes", "archived_at"]) {
+  for (const key of ["title", "client_name", "location", "currency", "notes", "archived_at", "ui_settings"]) {
     if (key in body) allowed[key] = body[key];
   }
   const { data, error } = await db.from("tenders").update(allowed).eq("id", id).select().single();

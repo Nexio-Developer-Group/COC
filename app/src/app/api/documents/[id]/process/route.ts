@@ -1,14 +1,16 @@
-import { NextResponse } from "next/server";
-import { runExtraction } from "@/lib/extract/pipeline";
+import { NextRequest, NextResponse } from "next/server";
+import { runStep } from "@/lib/extract/pipeline";
 
 export const maxDuration = 300;
 
-export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]/process">) {
+/** Runs ONE step (open file / read one sheet part / finalize). The client loops until done. */
+export async function POST(req: NextRequest, ctx: RouteContext<"/api/documents/[id]/process">) {
   const { id } = await ctx.params;
+  const body = await req.json().catch(() => ({}));
   try {
-    await runExtraction(id);
+    const result = await runStep(id, { restart: !!body.restart, retryFailed: !!body.retry_failed });
+    return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
-  return NextResponse.json({ ok: true });
 }
