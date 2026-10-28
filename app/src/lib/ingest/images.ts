@@ -48,7 +48,7 @@ export async function linkImagesToLines(documentId: string, lines: LineItem[]) {
   const items = lines.filter((l) => l.kind === "item" && l.source_row != null);
   for (const img of imgs) {
     const sheetBase = (img.sheet_name ?? "").split(" (part")[0];
-    const cands = items.filter((l) => (l.sheet_name ?? "").split(" (part")[0] === sheetBase && (l.source_row as number) <= (img.anchor_row as number) + 1);
+    const cands = items.filter((l) => (l.sheet_name ?? "").split(" (part")[0] === sheetBase && (l.source_row as number) <= (img.anchor_row as number));
     if (!cands.length) continue;
     const best = cands.reduce((a, b) => ((b.source_row as number) > (a.source_row as number) ? b : a));
     if ((img.anchor_row as number) - (best.source_row as number) > 12) continue;

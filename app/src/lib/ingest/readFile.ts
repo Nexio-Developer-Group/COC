@@ -27,6 +27,39 @@ export type ReadResult = {
 const MIME_BY_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml" };
 const MIN_IMAGE_BYTES = 1500; // skip 1px spacers / bullets
 
+/** Minimal RFC4180 line parser (quotes, escaped quotes, commas inside quotes). */
+export function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === "," || c === "\t" || c === ";") { out.push(cur); cur = ""; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+const colLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
+
+/** Rows that look like priced/quantified items: a number plus at least two text-ish cells. Used as a sanity floor. */
+export function expectedItemRows(text: string): number {
+  let n = 0;
+  for (const line of text.split("\n")) {
+    const cells = line.replace(/^[RL]\d+ \| /, "").split(" | ").map((c) => c.replace(/^[A-Z]{1,2}:/, "").trim()).filter(Boolean);
+    if (cells.length < 3) continue;
+    const numeric = cells.filter((c) => /^-?[\d,]+(\.\d+)?$/.test(c)).length;
+    const texty = cells.filter((c) => /[A-Za-z]{3,}/.test(c)).length;
+    if (numeric >= 1 && texty >= 2) n++;
+  }
+  return n;
+}
+
 export function detectType(filename: string, mimeType: string): ReadResult["sourceType"] {
   const ext = filename.toLowerCase().split(".").pop() || "";
   if (["xlsx", "xlsm"].includes(ext) || mimeType.includes("spreadsheetml")) return "xlsx";
@@ -181,8 +214,13 @@ export async function readFile(buffer: Buffer, filename: string, mimeType: strin
     default: {
       const text = buffer.toString("utf-8");
       const lines = text.split("\n").filter((l) => l.trim());
-      const prefix = sourceType === "csv" ? "R" : "L";
-      const rendered = lines.map((l, i) => `${prefix}${i + 1} | ${l.trim()}`).join("\n");
+      const rendered =
+        sourceType === "csv"
+          ? text.split(/\r?\n/).map((raw, i) => {
+              const cells = parseCsvLine(raw).map((v, ci) => [colLetter(ci), v.trim()] as const).filter(([, v]) => v);
+              return cells.length ? `R${i + 1} | ${cells.map(([c, v]) => `${c}:${v}`).join(" | ")}` : "";
+            }).filter(Boolean).join("\n")
+          : lines.map((l, i) => `L${i + 1} | ${l.trim()}`).join("\n");
       return { sourceType, sheets: [{ name: "Document", text: rendered, rowCount: lines.length, imageCount: 0 }], images: [] };
     }
   }

@@ -5,7 +5,7 @@ import { ExtractionSchema, type Extraction, type ExtractedItem } from "./schema"
 import { PROMPT_VERSION, SYSTEM_PROMPT, SYSTEM_PROMPT_COMPACT, buildUserPrompt } from "./prompts";
 import { normalizeUnit } from "@/lib/units";
 import { matchAll, type MatchCandidate } from "@/lib/match";
-import { chunkSheet, readFile } from "@/lib/ingest/readFile";
+import { chunkSheet, expectedItemRows, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
 import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
@@ -145,7 +145,9 @@ async function extractSheet(doc: Document, sheet: DocumentSheet, all: DocumentSh
   const { data: tender } = await db.from("tenders").select("*").eq("id", doc.tender_id).single();
   const { table } = await tenderCandidates(doc, tender?.requirements_doc_id ?? null);
 
-  const prev = all.filter((s) => s.idx < sheet.idx && s.status === "done").pop();
+  // only a previous PART of this same sheet can be "continued" — a new sheet always starts fresh
+  const baseName = (n: string) => n.split(" (part")[0];
+  const prev = all.filter((s) => s.idx < sheet.idx && s.status === "done" && baseName(s.name) === baseName(sheet.name)).pop();
   let previousSection: string | null = null;
   if (prev) {
     const { data: p } = await db.from("document_sheets").select("raw_output").eq("id", prev.id).single();
@@ -189,7 +191,14 @@ async function extractSheet(doc: Document, sheet: DocumentSheet, all: DocumentSh
         reasoningEffort: "low",
         validate: (parsed) => {
           const r = ExtractionSchema.safeParse(parsed);
-          return r.success ? { ok: true } : { ok: false, errors: r.error.issues.slice(0, 15).map((i) => `${i.path.join(".")}: ${i.message}`) };
+          if (!r.success) return { ok: false, errors: r.error.issues.slice(0, 15).map((i) => `${i.path.join(".")}: ${i.message}`) };
+          // coverage floor: a model that returns headings but no rows is silently losing the whole sheet
+          const expected = expectedItemRows(row?.rendered_text ?? "");
+          const got = r.data.sections.reduce((n, s) => n + s.items.length, 0);
+          if (r.data.document.sheet_kind !== "summary" && expected >= 3 && got < expected * 0.6) {
+            return { ok: false, errors: [`You returned only ${got} item(s) but the text contains about ${expected} item rows. Every row that has a quantity/rate/amount must become its own entry in the matching section's "items" array — do not leave "items" empty.`] };
+          }
+          return { ok: true };
         },
       }
     );

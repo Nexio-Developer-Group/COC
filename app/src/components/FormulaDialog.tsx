@@ -163,7 +163,7 @@ export default function FormulaDialog({
             <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2.5 mb-2 text-[13px]">
               <div className="flex gap-2"><Icon name="warn" className="w-4 h-4 mt-0.5 shrink-0" />
                 <div>
-                  <b>{conflicts.length} row{conflicts.length > 1 ? "s" : ""} already {conflicts.length > 1 ? "have" : "has"} a {field} that doesn’t follow this formula.</b>
+                  <b>{conflicts.length} row{conflicts.length > 1 ? "s" : ""} already {conflicts.length > 1 ? "have" : "has"} {field === "amount" ? "an" : "a"} {field} that doesn’t follow this formula.</b>
                   <div className="mt-0.5 text-amber-900/80">They’re <u>kept as they are</u> unless you tick them below. Nothing is overwritten silently.</div>
                   <div className="mt-1.5 flex gap-3 text-xs">
                     <button className="underline" onClick={() => setOverwrite(new Set(conflicts.map((c) => c.lineId)))}>Replace all of them</button>

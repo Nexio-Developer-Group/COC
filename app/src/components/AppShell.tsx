@@ -65,7 +65,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 <NavLink key={b.id} href={`${base}/bids/${b.id}`} indent active={params?.docId === b.id}>
                   <span className="inline-flex items-center gap-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${st.tone === "ok" ? "bg-emerald-400" : st.tone === "warn" ? "bg-amber-400" : st.tone === "bad" ? "bg-red-400" : "bg-sky-400"}`} />
-                    {b.party_name ?? "Unnamed bid"}
+                    {b.party_name ?? "Unnamed bid"}{b.status === "failed" && <span className="text-[10px] text-red-300">failed</span>}
                     {b.version_no > 1 && <span className="text-[10px] text-white/45">v{b.version_no}</span>}
                   </span>
                 </NavLink>
