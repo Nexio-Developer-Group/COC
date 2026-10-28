@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { applyUnitConversion, checkPlausibility, previewFormula, recompute, revertUnitConversion, type FormulaPreviewRow } from "@/lib/calc";
+import { applyUnitConversion, checkPlausibility, previewFormula, recompute, revertUnitConversion, unitMedians, type FormulaPreviewRow } from "@/lib/calc";
 import { describeFormula, evaluate, parseFormula, validateFormula, type NumericField } from "@/lib/formula";
 import { normalizeUnit } from "@/lib/units";
 import type { CellMeta, Document, LineItem } from "@/lib/types";
@@ -63,9 +63,10 @@ async function recomputeAnomalies(bundle: DocBundle) {
       }
     }
   }
+  const uMed = unitMedians(items);
   for (const l of items) {
     const t = l.tender_line_id ? tenderById.get(l.tender_line_id) : null;
-    l.anomalies = checkPlausibility(l, { role: bundle.doc.role, tenderLine: t ? { quantity: t.quantity, rate: t.rate, unit: t.unit } : null, medianRate: l.tender_line_id ? medians.get(l.tender_line_id) ?? null : null });
+    l.anomalies = checkPlausibility(l, { role: bundle.doc.role, currency: bundle.doc.currency ?? "INR", unitMedian: l.unit ? uMed.get(l.unit) ?? null : null, tenderLine: t ? { quantity: t.quantity, rate: t.rate, unit: t.unit } : null, medianRate: l.tender_line_id ? medians.get(l.tender_line_id) ?? null : null });
   }
 }
 

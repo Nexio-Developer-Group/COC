@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import mammoth from "mammoth";
+import { extractXlsxImages, stripDrawings } from "./xlsxImages";
 
 export type ExtractedImage = {
   buffer: Buffer;
@@ -53,11 +54,15 @@ function cellToText(v: ExcelJS.CellValue): string {
 }
 
 async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: ExtractedImage[] }> {
+  const images = await extractXlsxImages(buffer).catch(() => [] as ExtractedImage[]);
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  try {
+    await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  } catch {
+    // some drawing layouts crash the cell parser; the cells themselves are still readable without them
+    await wb.xlsx.load((await stripDrawings(buffer)) as unknown as ExcelJS.Buffer);
+  }
   const sheets: SheetText[] = [];
-  const images: ExtractedImage[] = [];
-
   wb.eachSheet((sheet) => {
     const lines: string[] = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
@@ -71,33 +76,8 @@ async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: 
       });
       if (parts.length) lines.push(`R${rowNumber} | ${parts.join(" | ")}`);
     });
-
-    let imageCount = 0;
-    try {
-      for (const img of sheet.getImages()) {
-        const media = wb.getImage(Number(img.imageId));
-        if (!media?.buffer) continue;
-        const buf = Buffer.from(media.buffer as unknown as ArrayBuffer);
-        if (buf.length < MIN_IMAGE_BYTES) continue;
-        const ext = (media.extension || "png").toLowerCase();
-        const tl = img.range.tl as { nativeRow?: number; row?: number; nativeCol?: number; col?: number };
-        images.push({
-          buffer: buf,
-          mime: MIME_BY_EXT[ext] ?? "image/png",
-          ext,
-          sheetName: sheet.name,
-          anchorRow: (tl.nativeRow ?? Math.floor(tl.row ?? 0)) + 1,
-          anchorCol: (tl.nativeCol ?? Math.floor(tl.col ?? 0)) + 1,
-        });
-        imageCount++;
-      }
-    } catch {
-      /* some workbooks carry malformed drawing parts — text is still usable */
-    }
-
-    if (lines.length > 0 || imageCount > 0) {
-      sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount });
-    }
+    const imageCount = images.filter((i) => i.sheetName === sheet.name).length;
+    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount });
   });
   return { sheets, images };
 }

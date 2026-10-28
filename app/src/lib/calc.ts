@@ -84,12 +84,12 @@ export function recompute(
         let ruleKind: "document" | "row" = "document";
         let src: CellMeta["src"] = "autofill";
 
-        if (meta?.formula) {
+        if (meta?.formula && meta.src !== "converted") {
           // already formula-driven (autofill or a user-applied formula) — keep it fresh
           expr = meta.formula;
           ruleKind = meta.rule ?? "row";
           src = meta.src === "manual" ? "manual" : "autofill";
-        } else if (current == null && meta?.src !== "manual") {
+        } else if (current == null && meta?.src !== "manual" && meta?.src !== "converted") {
           const r = ruleFor(field, rules);
           if (r) {
             expr = r.expr;
@@ -259,8 +259,30 @@ export function revertUnitConversion(line: LineItem): CellChange[] {
 type PlausibilityCtx = {
   tenderLine?: Pick<LineItem, "quantity" | "rate" | "unit"> | null;
   medianRate?: number | null;
+  /** median rate of this document's own lines in the same unit */
+  unitMedian?: number | null;
+  currency?: string | null;
   role: "tender" | "bid";
 };
+
+/** Typical rate per unit inside one document (needs 3+ priced lines per unit to mean anything). */
+export function unitMedians(lines: LineItem[]): Map<string, number> {
+  const by = new Map<string, number[]>();
+  for (const l of lines) {
+    if (l.kind !== "item" || !l.unit || !((Number(l.rate) || 0) > 0)) continue;
+    by.set(l.unit, [...(by.get(l.unit) ?? []), Number(l.rate)]);
+  }
+  const out = new Map<string, number>();
+  for (const [u, v] of by) {
+    if (v.length < 3) continue;
+    const s = [...v].sort((a, b) => a - b);
+    out.set(u, s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2);
+  }
+  return out;
+}
+
+/** Rough ceilings per unit in INR; anything above is almost certainly an extra zero. */
+const INR_CEILING: Record<string, number> = { sqm: 150000, sqft: 15000, rmt: 100000, rft: 30000, cum: 150000, kg: 10000, nos: 5000000 };
 
 /** Flags values that are mathematically fine but unlikely in the real world. */
 export function checkPlausibility(line: LineItem, ctx: PlausibilityCtx): Anomaly[] {
@@ -282,6 +304,14 @@ export function checkPlausibility(line: LineItem, ctx: PlausibilityCtx): Anomaly
   if (q != null && q > 10_000_000) out.push({ field: "quantity", code: "implausible_magnitude", severity: "warn", message: `Quantity ${fmt(q)} ${unit} is unusually large.` });
   if (r != null && r > 100_000_000) out.push({ field: "rate", code: "implausible_magnitude", severity: "warn", message: `Rate ${fmt(r)} per ${unit || "unit"} is unusually large.` });
   if (a != null && a > 100_000_000_000) out.push({ field: "amount", code: "implausible_magnitude", severity: "warn", message: `Amount ${fmt(a)} is unusually large.` });
+  if (priced && r != null && r > 0 && ctx.currency === "INR" && INR_CEILING[unit] && r > INR_CEILING[unit]) {
+    out.push({ field: "rate", code: "implausible_magnitude", severity: "warn", message: `Rate ${fmt(r)} per ${unit} is far above anything typical (usually under ${fmt(INR_CEILING[unit])}) — check for an extra zero.` });
+  }
+  if (priced && r != null && r > 0 && ctx.unitMedian && ctx.unitMedian > 0 && !out.some((o) => o.field === "rate")) {
+    const ratio = r / ctx.unitMedian;
+    if (ratio > 25) out.push({ field: "rate", code: "rate_outlier_high", severity: "warn", message: `Rate ${fmt(r)} is ${Math.round(ratio)}× the typical ${unit} rate in this document (${fmt(ctx.unitMedian)}) — unlikely to be realistic.` });
+    else if (ratio < 1 / 40) out.push({ field: "rate", code: "rate_outlier_low", severity: "warn", message: `Rate ${fmt(r)} is a tiny fraction of the typical ${unit} rate in this document (${fmt(ctx.unitMedian)}) — unlikely to be realistic.` });
+  }
   if (priced && r != null && r > 0 && r < 1 && unit !== "%" && unit !== "ls") {
     out.push({ field: "rate", code: "implausible_low_rate", severity: "warn", message: `Rate ${fmt(r)} per ${unit || "unit"} is below ₹1 — likely a typing or unit slip.` });
   }
@@ -299,7 +329,7 @@ export function checkPlausibility(line: LineItem, ctx: PlausibilityCtx): Anomaly
       if (dev > 0.25) out.push({ field: "quantity", code: "qty_deviation", severity: "warn", message: `Quoted quantity ${fmt(q)} differs from your BOQ quantity ${fmt(t.quantity)} by ${Math.round(dev * 100)}%.` });
     }
     const ref = t?.rate && t.rate > 0 ? t.rate : ctx.medianRate;
-    if (r != null && r > 0 && ref && ref > 0) {
+    if (r != null && r > 0 && ref && ref > 0 && !out.some((o) => o.field === "rate")) {
       const ratio = r / ref;
       const basis = t?.rate && t.rate > 0 ? "your budget rate" : "the median of the other bids";
       if (ratio > 5) out.push({ field: "rate", code: "rate_outlier_high", severity: "warn", message: `Rate ${fmt(r)} is ${ratio.toFixed(1)}× ${basis} (${fmt(ref)}) — unlikely to be realistic.` });

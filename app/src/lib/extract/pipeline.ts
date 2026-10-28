@@ -4,10 +4,10 @@ import { groqJsonCompletion, GROQ_TPM, estimateTokens } from "@/lib/groq";
 import { ExtractionSchema, type Extraction, type ExtractedItem } from "./schema";
 import { PROMPT_VERSION, SYSTEM_PROMPT, SYSTEM_PROMPT_COMPACT, buildUserPrompt } from "./prompts";
 import { normalizeUnit } from "@/lib/units";
-import { matchBidItem, type MatchCandidate } from "@/lib/match";
+import { matchAll, type MatchCandidate } from "@/lib/match";
 import { chunkSheet, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
-import { applyUnitConversion, checkPlausibility, recompute } from "@/lib/calc";
+import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
 
 export type StepResult = { done: boolean; phase: "prepare" | "extract" | "finalize" | "failed"; detail: string; total: number; completed: number };
@@ -287,6 +287,13 @@ async function finalize(doc: Document): Promise<StepResult> {
   const stamp = new Date().toISOString();
   const lines: LineItem[] = [];
   let pos = 0;
+  const matches =
+    doc.role === "bid" && candidates.length
+      ? matchAll(
+          merged.flatMap((sec, si) => sec.items.map((item, ii) => ({ key: `${si}.${ii}`, source_ref: item.source_ref, name: item.name, description: item.description, unit: item.unit, quantity: item.quantity, section_name: sec.name, hint: item.tender_ref ?? null }))),
+          candidates
+        )
+      : new Map();
   merged.forEach((sec, si) => {
     const sectionId = crypto.randomUUID();
     pos++;
@@ -304,11 +311,11 @@ async function finalize(doc: Document): Promise<StepResult> {
       let mc: LineItem["match_confidence"] = null;
       let mn: string | null = null;
       if (doc.role === "bid" && candidates.length) {
-        const m = matchBidItem({ source_ref: item.source_ref, name: item.name, unit: item.unit, quantity: item.quantity, section_name: sec.name }, item.tender_ref, candidates);
-        tenderLineId = m.tender_line_id;
-        mm = m.match_method;
-        mc = m.match_confidence;
-        mn = m.match_note;
+        const m = matches.get(`${si}.${ii}`);
+        tenderLineId = m?.tender_line_id ?? null;
+        mm = m?.match_method ?? null;
+        mc = m?.match_confidence ?? null;
+        mn = m?.match_note ?? null;
         if (!tenderLineId) issues.push({ code: "unmatched_bid_item", severity: "info", category: "match", message: `${si + 1}.${ii + 1} ${item.name ?? ""} doesn't match any BOQ item — shown as an extra item offered.` });
       }
       lines.push({
@@ -331,9 +338,11 @@ async function finalize(doc: Document): Promise<StepResult> {
   recompute(lines, doc.field_rules, { primaryVariant, cause: "autofill" });
 
   const medians = await otherBidMedians(doc);
+  const uMed = unitMedians(itemLines);
+  const cur = header.currency ?? tender?.currency ?? "INR";
   for (const l of itemLines) {
     const t = l.tender_line_id ? tenderById.get(l.tender_line_id) : null;
-    l.anomalies = checkPlausibility(l, { role: doc.role, tenderLine: t ? { quantity: t.quantity, rate: t.rate, unit: t.unit } : null, medianRate: l.tender_line_id ? medians.get(l.tender_line_id) ?? null : null });
+    l.anomalies = checkPlausibility(l, { role: doc.role, currency: cur, unitMedian: l.unit ? uMed.get(l.unit) ?? null : null, tenderLine: t ? { quantity: t.quantity, rate: t.rate, unit: t.unit } : null, medianRate: l.tender_line_id ? medians.get(l.tender_line_id) ?? null : null });
   }
 
   // ---- persist lines in bulk --------------------------------------------------------
