@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import type { Comparison } from "@/lib/compare";
 import { useApi } from "@/lib/client/api";
+import ContractorScorecards from "@/components/ContractorScorecards";
 import ComparisonGrid from "@/components/ComparisonGrid";
 import { EmptyState, ExportMenu, PageHeader, Spinner } from "@/components/ui";
 
@@ -19,7 +20,10 @@ export default function ComparePage() {
       ) : c.bids.length === 0 ? (
         <EmptyState icon="users" title="No bids to compare yet" text="Bids appear here as soon as they’ve been read (you can still review them afterwards)." />
       ) : (
-        <ComparisonGrid comparison={c} tenderId={id} />
+        <>
+          <ContractorScorecards comparison={c} tenderId={id} />
+          <ComparisonGrid comparison={c} tenderId={id} />
+        </>
       )}
     </div>
   );
