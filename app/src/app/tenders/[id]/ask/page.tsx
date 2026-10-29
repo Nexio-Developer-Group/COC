@@ -1,34 +1,34 @@
 "use client";
 
-import { useRouter, useParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useState } from "react";
-import { refresh, send, useApi } from "@/lib/client/api";
+import { send, useApi } from "@/lib/client/api";
+import { useJobs } from "@/lib/client/jobs";
 import type { Playbook } from "@/lib/types";
 import { PlaybookCard, PlaybookEditor, RunPlaybookDialog } from "@/components/Playbooks";
-import { Button, Card, PageHeader, Spinner } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
 import Icon from "@/components/ui/Icon";
-import { useToast } from "@/components/ui/Toasts";
 
 const TYPES = [{ v: "auto", l: "Let us choose" }, { v: "table", l: "Table" }, { v: "ranking", l: "Ranking" }, { v: "narrative", l: "Written report" }];
 
 export default function AskPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
-  const toast = useToast();
+  const jobs = useJobs();
   const { data } = useApi<{ playbooks: Playbook[] }>("/api/playbooks");
   const [text, setText] = useState("");
   const [type, setType] = useState("auto");
-  const [running, setRunning] = useState(false);
   const [runPb, setRunPb] = useState<Playbook | null>(null);
   const [edit, setEdit] = useState<Partial<Playbook> | null>(null);
 
-  async function ask() {
-    setRunning(true);
-    const r = await send(`/api/tenders/${id}/analyses`, "POST", { request_text: text, requested_type: type });
-    setRunning(false);
-    if (!r.ok) return toast.push({ text: r.data.error ?? "We couldn’t produce a reliable answer. Try rephrasing, or use a Playbook.", tone: "bad" });
-    refresh(`/api/tenders/${id}/analyses`);
-    router.push(`/tenders/${id}/reports/${r.data.id}`);
+  function ask() {
+    const q = text.trim();
+    jobs.startAnalysis({
+      tenderId: id,
+      title: q.length > 70 ? q.slice(0, 68) + "…" : q,
+      subtitle: type === "auto" ? "Question" : type,
+      run: () => send(`/api/tenders/${id}/analyses`, "POST", { request_text: q, requested_type: type }),
+    });
+    setText("");
   }
 
   return (
@@ -40,8 +40,8 @@ export default function AskPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
           <div className="inline-flex rounded-lg border border-line bg-white p-0.5 text-sm">{TYPES.map((t) => <button key={t.v} onClick={() => setType(t.v)} className={`px-3 py-1.5 rounded-md ${type === t.v ? "bg-brand-dark text-white" : "hover:bg-black/5 text-brand-dark/70"}`}>{t.l}</button>)}</div>
           <div className="flex items-center gap-3">
-            {running && <span className="text-xs text-brand-dark/55">Reading bids → comparing → writing… (20–60 s)</span>}
-            <Button variant="primary" icon="spark" disabled={!text.trim() || running} onClick={ask}>{running ? <Spinner /> : null}Run analysis</Button>
+            <span className="text-xs text-brand-dark/45 hidden sm:inline">Runs in the background — ask several at once</span>
+            <Button variant="primary" icon="spark" disabled={!text.trim()} onClick={ask}>Run analysis</Button>
           </div>
         </div>
       </Card>

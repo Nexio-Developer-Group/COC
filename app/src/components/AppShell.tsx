@@ -9,6 +9,7 @@ import type { Document, Tender } from "@/lib/types";
 import Icon from "./ui/Icon";
 import { ExportMenu, Pill, statusPill } from "./ui";
 import { ToastProvider } from "./ui/Toasts";
+import { JobsProvider } from "@/lib/client/jobs";
 
 type TenderPayload = { tender: Tender; requirementsDoc: Document | null; bids: Document[] };
 
@@ -120,6 +121,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
   return (
     <ToastProvider>
+      <JobsProvider>
       <div className="min-h-screen lg:flex">
         <aside className="no-print hidden lg:block w-[264px] shrink-0 bg-brand-dark-dull sticky top-0 h-screen">
           <Sidebar />
@@ -137,6 +139,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         )}
         <main style={theme.style} className={`flex-1 min-w-0 px-4 sm:px-8 py-6 lg:py-8 max-w-[1500px] ${theme.hlOff ? "hl-off" : ""}`}>{children}</main>
       </div>
+      </JobsProvider>
     </ToastProvider>
   );
 }

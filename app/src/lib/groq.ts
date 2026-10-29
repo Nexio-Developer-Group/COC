@@ -1,3 +1,5 @@
+import { keyLabel, markDead, markLimited, nextKey } from "./groqKeys";
+
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -23,6 +25,7 @@ export type GroqCallMeta = {
   tokensOut?: number;
   latencyMs: number;
   finishReason?: string;
+  keyUsed?: string;
 };
 
 /**
@@ -43,9 +46,10 @@ export async function groqJsonCompletion<T = unknown>(
     reasoningEffort?: "low" | "medium" | "high";
   } = {}
 ): Promise<{ data: T; meta: GroqCallMeta }> {
-  const apiKey = process.env.GROQ_API_KEY;
   const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-  if (!apiKey) throw new Error("Missing GROQ_API_KEY");
+  let pick = nextKey();
+  let apiKey = pick.key;
+  if (pick.waitMs > 0) await new Promise((r) => setTimeout(r, Math.min(pick.waitMs, 30000)));
 
   const maxRetries = opts.maxRetries ?? 2;
   let currentMessages = messages;
@@ -78,16 +82,32 @@ export async function groqJsonCompletion<T = unknown>(
     // the window) are the same rolling rate limit surfacing differently. 429 just needs a wait;
     // 413 means the request itself is too big for the hard per-request cap, so shrink the
     // reserved completion budget too — waiting alone never fixes a 413.
-    while ((res.status === 429 || res.status === 413) && rateLimitWaits < 6) {
+    while ((res.status === 429 || res.status === 413 || res.status === 401) && rateLimitWaits < 8) {
       rateLimitWaits++;
       const body = await res.text();
-      if (!/tokens per minute|rate_limit/i.test(body)) break;
+      if (res.status === 401) {
+        // this key is invalid/revoked: take it out of rotation and carry on with another
+        markDead(apiKey);
+        pick = nextKey(apiKey);
+        apiKey = pick.key;
+        res = await doFetch();
+        continue;
+      }
+      if (!/tokens per minute|rate_limit|requests per/i.test(body)) {
+        // not a limit problem; surface the original response below
+        res = new Response(body, { status: res.status });
+        break;
+      }
       if (res.status === 413) {
         currentMaxTokens = Math.max(2000, Math.floor(currentMaxTokens * 0.6));
       }
-      const match = body.match(/try again in ([\d.]+)s/i);
-      const waitMs = Math.min(match ? parseFloat(match[1]) * 1000 : 15000, 30000) + 250;
-      await new Promise((r) => setTimeout(r, waitMs));
+      const match = body.match(/try again in ([\d.]+)(ms|s)/i);
+      const waitMs = (match ? parseFloat(match[1]) * (match[2].toLowerCase() === "ms" ? 1 : 1000) : 15000) + 250;
+      // park this key and move to the next one; only sleep if every key is parked
+      markLimited(apiKey, Math.min(waitMs, 60000));
+      pick = nextKey(apiKey);
+      apiKey = pick.key;
+      if (pick.waitMs > 0) await new Promise((r) => setTimeout(r, Math.min(pick.waitMs, 30000)));
       res = await doFetch();
     }
 
@@ -153,6 +173,7 @@ export async function groqJsonCompletion<T = unknown>(
 
     const validation = opts.validate ? opts.validate(parsed) : { ok: true as const };
     if (validation.ok) {
+      console.log(`[groq] key ${keyLabel(apiKey)} ok · attempt ${attempt + 1} · ${Date.now() - start}ms`);
       return {
         data: parsed as T,
         meta: {
@@ -163,6 +184,7 @@ export async function groqJsonCompletion<T = unknown>(
           tokensOut: lastUsage?.completion_tokens,
           latencyMs: Date.now() - start,
           finishReason: lastFinishReason,
+          keyUsed: keyLabel(apiKey),
         },
       };
     }

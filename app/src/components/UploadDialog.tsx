@@ -1,16 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import { useRef, useState } from "react";
-import { refresh } from "@/lib/client/api";
-import { uploadAndProcess, type UploadProgress } from "@/lib/client/upload";
-import { Button, Modal, Spinner } from "./ui";
+import { useJobs } from "@/lib/client/jobs";
+import { Button, Modal } from "./ui";
 import Icon from "./ui/Icon";
+import { useToast } from "./ui/Toasts";
 
-type Item = { id: number; file: File; party: string; progress: UploadProgress | null };
+type Item = { id: number; file: File; party: string };
 
+/** Picks files and hands them to the background job queue; reading continues after the dialog closes. */
 export default function UploadDialog({
-  tenderId, role, open, onClose, replace, onDone,
+  tenderId, role, open, onClose, replace,
 }: {
   tenderId: string;
   role: "tender" | "bid";
@@ -19,48 +19,37 @@ export default function UploadDialog({
   replace?: { id: string; partyName: string | null } | null;
   onDone?: (ids: string[]) => void;
 }) {
+  const jobs = useJobs();
+  const toast = useToast();
   const [items, setItems] = useState<Item[]>([]);
-  const [running, setRunning] = useState(false);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const multi = role === "bid" && !replace;
 
   function add(files: FileList | File[]) {
     const list = Array.from(files).filter((f) => !/\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name));
-    setItems((cur) => [...(multi ? cur : []), ...(multi ? list : list.slice(0, 1)).map((f, i) => ({ id: Date.now() + i, file: f, party: "", progress: null }))]);
+    setItems((cur) => [...(multi ? cur : []), ...(multi ? list : list.slice(0, 1)).map((f, i) => ({ id: Date.now() + i, file: f, party: "" }))]);
   }
-  async function start() {
-    setRunning(true);
-    const ids: string[] = [];
+  function start() {
     for (const it of items) {
-      if (it.progress?.phase === "done") continue;
-      const id = await uploadAndProcess({
-        tenderId, file: it.file, role, partyName: replace?.partyName ?? (it.party || null), replaceDocumentId: replace?.id ?? null,
-        onProgress: (p) => setItems((cur) => cur.map((x) => (x.id === it.id ? { ...x, progress: p } : x))),
-      });
-      if (id) ids.push(id);
-      refresh(`/api/tenders/${tenderId}`);
+      jobs.startUpload({ tenderId, file: it.file, role, partyName: replace?.partyName ?? (it.party || null), replaceDocumentId: replace?.id ?? null });
     }
-    setRunning(false);
-    onDone?.(ids);
+    toast.push({ text: `Reading ${items.length} file${items.length > 1 ? "s" : ""} in the background — keep working, progress is shown bottom-right.`, tone: "info" });
+    setItems([]);
+    onClose();
   }
-  const allDone = items.length > 0 && items.every((i) => i.progress?.phase === "done" || i.progress?.phase === "error");
 
   return (
     <Modal
       open={open}
-      onClose={() => !running && (setItems([]), onClose())}
+      onClose={() => { setItems([]); onClose(); }}
       wide
       title={replace ? `Upload a revised bid${replace.partyName ? ` for ${replace.partyName}` : ""}` : role === "tender" ? "Upload your requirements (BOQ)" : "Upload bids"}
       footer={
-        allDone ? (
-          <Button variant="primary" onClick={() => { setItems([]); onClose(); }}>Done</Button>
-        ) : (
-          <>
-            <Button onClick={() => { setItems([]); onClose(); }} disabled={running}>Cancel</Button>
-            <Button variant="primary" icon="upload" disabled={!items.length || running} onClick={start}>{running ? <><Spinner /> Working…</> : `Read ${items.length || ""} file${items.length === 1 ? "" : "s"}`}</Button>
-          </>
-        )
+        <>
+          <Button onClick={() => { setItems([]); onClose(); }}>Cancel</Button>
+          <Button variant="primary" icon="upload" disabled={!items.length} onClick={start}>{`Read ${items.length || ""} file${items.length === 1 ? "" : "s"}`}</Button>
+        </>
       }
     >
       {replace && (
@@ -83,36 +72,22 @@ export default function UploadDialog({
 
       {items.length > 0 && (
         <ul className="mt-4 space-y-2">
-          {items.map((it) => {
-            const p = it.progress;
-            return (
-              <li key={it.id} className="border border-line rounded-xl px-3.5 py-3">
-                <div className="flex items-center gap-3">
-                  <Icon name="sheet" className="w-5 h-5 text-brand-accent shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium truncate">{it.file.name}</div>
-                    <div className="text-[11px] text-brand-dark/45">{(it.file.size / 1024).toFixed(0)} KB</div>
-                  </div>
-                  {role === "bid" && !replace && !p && (
-                    <input value={it.party} onChange={(e) => setItems((cur) => cur.map((x) => (x.id === it.id ? { ...x, party: e.target.value } : x)))} placeholder="Contractor name (optional)" className="text-xs border border-line rounded-lg px-2.5 py-1.5 w-52" />
-                  )}
-                  {!p && !running && <button onClick={() => setItems((c) => c.filter((x) => x.id !== it.id))} className="text-brand-dark/35 hover:text-red-600"><Icon name="x" /></button>}
-                </div>
-                {p && (
-                  <div className="mt-2.5">
-                    <div className="h-1.5 rounded-full bg-brand-light overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${p.phase === "error" ? "bg-red-500" : "bg-brand-primary"}`} style={{ width: `${p.pct}%` }} /></div>
-                    <div className="flex items-center justify-between mt-1.5 text-xs">
-                      <span className={p.phase === "error" ? "text-red-600" : "text-brand-dark/60"}>{p.phase === "error" ? p.error : p.detail}</span>
-                      {p.phase === "done" && p.documentId && <Link href={role === "tender" ? `/tenders/${tenderId}/requirements` : `/tenders/${tenderId}/bids/${p.documentId}`} className="text-brand-contrast hover:underline" onClick={onClose}>Review →</Link>}
-                    </div>
-                  </div>
-                )}
-              </li>
-            );
-          })}
+          {items.map((it) => (
+            <li key={it.id} className="border border-line rounded-xl px-3.5 py-3 flex items-center gap-3">
+              <Icon name="sheet" className="w-5 h-5 text-brand-accent shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{it.file.name}</div>
+                <div className="text-[11px] text-brand-dark/45">{(it.file.size / 1024).toFixed(0)} KB</div>
+              </div>
+              {role === "bid" && !replace && (
+                <input value={it.party} onChange={(e) => setItems((cur) => cur.map((x) => (x.id === it.id ? { ...x, party: e.target.value } : x)))} placeholder="Contractor name (optional)" className="text-xs border border-line rounded-lg px-2.5 py-1.5 w-52" />
+              )}
+              <button onClick={() => setItems((c) => c.filter((x) => x.id !== it.id))} className="text-brand-dark/35 hover:text-red-600"><Icon name="x" /></button>
+            </li>
+          ))}
         </ul>
       )}
-      {running && <p className="text-xs text-brand-dark/45 mt-3">Big workbooks are read sheet by sheet — this can take a minute or two. You can leave this open.</p>}
+      <p className="text-xs text-brand-dark/45 mt-3">Files are read in the background, up to 3 at a time, so you can add more or keep browsing while they finish.</p>
     </Modal>
   );
 }

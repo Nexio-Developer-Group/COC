@@ -1,8 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { refresh, send } from "@/lib/client/api";
+import { useJobs } from "@/lib/client/jobs";
 import type { Playbook } from "@/lib/types";
 import { Button, Card, Modal, Pill, Spinner } from "./ui";
 import Icon from "./ui/Icon";
@@ -59,46 +59,37 @@ export function PlaybookEditor({ open, onClose, initial, onSaved }: { open: bool
 
 /** Runs a playbook on a tender: asks for any {{variables}}, shows progress, opens the report. */
 export function RunPlaybookDialog({ playbook, tenderId, onClose }: { playbook: Playbook; tenderId: string; onClose: () => void }) {
-  const router = useRouter();
-  const toast = useToast();
+  const jobs = useJobs();
   const [values, setValues] = useState<Record<string, string>>({});
-  const [running, setRunning] = useState(false);
-  const [stage, setStage] = useState(0);
   const needs = playbook.parameters ?? [];
 
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setStage((s) => Math.min(s + 1, 2)), 9000);
-    return () => clearInterval(t);
-  }, [running]);
-
-  async function run(force = false) {
-    setRunning(true);
-    const r = await send(`/api/playbooks/${playbook.id}/run`, "POST", { tender_id: tenderId, params: values, force });
-    setRunning(false);
-    if (!r.ok) return toast.push({ text: r.data.error ?? "Couldn’t run this Playbook", tone: "bad" });
-    refresh("/api/playbooks", `/api/tenders/${tenderId}/analyses`);
-    router.push(`/tenders/${tenderId}/reports/${r.data.id}`);
+  function run() {
+    const missing = needs.filter((p) => !values[p.key]?.trim());
+    if (missing.length) return;
+    jobs.startAnalysis({
+      tenderId,
+      title: playbook.name,
+      subtitle: "Playbook",
+      run: async () => {
+        const r = await send(`/api/playbooks/${playbook.id}/run`, "POST", { tender_id: tenderId, params: values });
+        refresh("/api/playbooks");
+        return r;
+      },
+    });
     onClose();
   }
   useEffect(() => { if (needs.length === 0) run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  if (needs.length === 0) return null;
 
   return (
-    <Modal open onClose={() => !running && onClose()} title={<span>{playbook.emoji} {playbook.name}</span>} footer={needs.length > 0 && !running ? <><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon="play" onClick={() => run()}>Run</Button></> : undefined}>
-      {running ? (
-        <div className="py-6 text-center">
-          <Spinner className="w-7 h-7 text-brand-primary" />
-          <div className="mt-3 font-medium">{["Reading the bids…", "Comparing rates and terms…", "Writing your answer…"][stage]}</div>
-          <div className="text-xs text-brand-dark/50 mt-1">Usually 20–60 seconds.</div>
-        </div>
-      ) : (
-        <div className="space-y-3 text-sm">
-          <p className="text-brand-dark/65">{playbook.description}</p>
-          {needs.map((p) => (
-            <label key={p.key} className="block"><div className="text-xs font-medium text-brand-dark/60 mb-1">{p.label}</div><input autoFocus value={values[p.key] ?? ""} onChange={(e) => setValues({ ...values, [p.key]: e.target.value })} placeholder={p.placeholder} className="w-full border border-line rounded-lg px-3 py-2.5" /></label>
-          ))}
-        </div>
-      )}
+    <Modal open onClose={onClose} title={<span>{playbook.emoji} {playbook.name}</span>} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon="play" disabled={needs.some((p) => !values[p.key]?.trim())} onClick={run}>Run</Button></>}>
+      <div className="space-y-3 text-sm">
+        <p className="text-brand-dark/65">{playbook.description}</p>
+        {needs.map((p) => (
+          <label key={p.key} className="block"><div className="text-xs font-medium text-brand-dark/60 mb-1">{p.label}</div><input autoFocus value={values[p.key] ?? ""} onChange={(e) => setValues({ ...values, [p.key]: e.target.value })} onKeyDown={(e) => e.key === "Enter" && run()} placeholder={p.placeholder} className="w-full border border-line rounded-lg px-3 py-2.5" /></label>
+        ))}
+        <p className="text-xs text-brand-dark/45">It runs in the background — you can keep working.</p>
+      </div>
     </Modal>
   );
 }
