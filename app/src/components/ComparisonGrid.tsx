@@ -41,7 +41,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
       lastSection = item.sectionName;
       rows.push(
         <tr key={`s-${item.itemCode}`} className="bg-brand-accent text-white">
-          <td colSpan={lead + bids.length + 1} className="px-3 py-2 font-semibold sticky left-0">{item.sectionName ?? "General"}</td>
+          <td colSpan={lead + bids.length + 1} className="p-0 font-semibold"><div className="sticky left-0 w-max max-w-[100vw] px-3 py-2">{item.sectionName ?? "General"}</div></td>
         </tr>
       );
     }
@@ -162,7 +162,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
 function Foot({ label, bids, f, strong, hint, lead }: { label: string; bids: Comparison["bids"]; lead: number; f: (b: Comparison["bids"][number]) => string; strong?: boolean; hint?: string }) {
   return (
     <tr className={`border-t ${strong ? "border-t-2 border-brand-dark/20 bg-brand-light-dull font-semibold" : "border-line"}`}>
-      <td colSpan={lead} className="px-3 py-2 sticky left-0 bg-inherit" title={hint}>{label}</td>
+      <td colSpan={lead} className="p-0 bg-inherit" title={hint}><div className="sticky left-0 w-max px-3 py-2">{label}</div></td>
       {bids.map((b) => <td key={b.documentId} className="px-3 py-2 text-right tabular-nums">{f(b)}</td>)}
       <td />
     </tr>
