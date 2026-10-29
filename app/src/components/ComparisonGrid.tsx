@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { formatINR, formatQty } from "@/lib/format";
-import type { Comparison, ComparisonCell } from "@/lib/compare";
+import { REQ_TOLERANCE, type Comparison, type ComparisonCell } from "@/lib/compare";
 import { Pill } from "./ui";
 import Icon from "./ui/Icon";
 
@@ -25,6 +25,10 @@ function cellStyle(c: ComparisonCell | undefined, isMin: boolean, isMax: boolean
 export default function ComparisonGrid({ comparison, tenderId }: { comparison: Comparison; tenderId: string }) {
   const [mode, setMode] = useState<Mode>("rates");
   const [section, setSection] = useState<string>("all");
+  const hasReq = comparison.requirementPricedItems > 0;
+  const [showReq, setShowReq] = useState(true);
+  const reqOn = hasReq && showReq;
+  const lead = reqOn ? 5 : 4;
   const bids = useMemo(() => [...comparison.bids].sort((a, b) => a.rank - b.rank), [comparison.bids]);
   const sections = comparison.sections;
   const items = comparison.items.filter((i) => section === "all" || (i.sectionName ?? "General") === section);
@@ -37,7 +41,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
       lastSection = item.sectionName;
       rows.push(
         <tr key={`s-${item.itemCode}`} className="bg-brand-accent text-white">
-          <td colSpan={4 + bids.length + 1} className="px-3 py-2 font-semibold sticky left-0">{item.sectionName ?? "General"}</td>
+          <td colSpan={lead + bids.length + 1} className="px-3 py-2 font-semibold sticky left-0">{item.sectionName ?? "General"}</td>
         </tr>
       );
     }
@@ -47,12 +51,13 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
         <td className="px-3 py-1.5 sticky left-14 bg-white group-hover:bg-brand-light-dull min-w-[220px]">{item.name}</td>
         <td className="px-3 py-1.5 text-brand-dark/60">{item.unit ?? "—"}</td>
         <td className="px-3 py-1.5 text-right tabular-nums">{formatQty(item.quantity)}</td>
+        {reqOn && <td className="px-3 py-1.5 text-right tabular-nums bg-brand-light-dull/70 border-x border-line" title="The tender's own rate for this item">{item.tenderRate != null ? formatINR(mode === "amounts" ? item.tenderAmount : item.tenderRate, cur) : <span className="text-brand-dark/30">—</span>}</td>}
         {bids.map((b) => {
           const c = item.cells[b.documentId];
           const multi = item.minRate !== item.maxRate;
           const isMin = c?.status === "priced" && multi && c.rate === item.minRate;
           const isMax = c?.status === "priced" && multi && c.rate === item.maxRate;
-          const tip = [c?.remarks, c?.converted ? `Unit converted ${c.converted}` : null, c?.src === "autofill" ? "Calculated for you" : null, c?.qtyMismatch ? "Quantity differs from your BOQ — amount uses your quantity" : null, ...(c?.anomalies ?? []).map((a) => `⚠ ${a.replace(/_/g, " ")}`)].filter(Boolean).join("\n");
+          const tip = [c?.remarks, c?.converted ? `Unit converted ${c.converted}` : null, c?.src === "autofill" ? "Calculated for you" : null, c?.qtyMismatch ? "Quantity differs from your BOQ — amount uses your quantity" : null, c?.unitDiffers ? "Unit differs from your BOQ" : null, c?.rateVsReq != null ? `${c.rateVsReq > 0 ? "+" : ""}${(c.rateVsReq * 100).toFixed(1)}% vs requirement rate` : null, ...(c?.anomalies ?? []).map((a) => `⚠ ${a.replace(/_/g, " ")}`)].filter(Boolean).join("\n");
           return (
             <td key={b.documentId} title={tip || undefined} className={`grid-cell px-3 py-1.5 text-right tabular-nums ${cellStyle(c, !!isMin, !!isMax)}`}>
               {c?.status === "missing" && "×"}
@@ -65,6 +70,9 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
                   {mode === "both" && <span className="block text-[11px] opacity-60">{formatINR(c.amount, cur)}</span>}
                   {mode === "amounts" && formatINR(c.amount, cur)}
                 </Link>
+              )}
+              {reqOn && c?.status === "priced" && c.rateVsReq != null && Math.abs(c.rateVsReq) > 0.0005 && mode !== "amounts" && (
+                <span className={`block text-[10px] ${c.rateVsReq > REQ_TOLERANCE ? "text-red-700" : c.rateVsReq < -REQ_TOLERANCE ? "text-green-700" : "text-brand-dark/45"}`}>{c.rateVsReq > 0 ? "+" : ""}{(c.rateVsReq * 100).toFixed(1)}% vs req</span>
               )}
               {c?.flags.includes("MATERIAL_BY_CLIENT") && <span title="Material by client" className="ml-1">🏷</span>}
               {c?.flags.includes("LABOUR_ONLY") && <span title="Labour only" className="ml-1">🛠</span>}
@@ -85,6 +93,11 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
             <button key={m} onClick={() => setMode(m)} className={`px-3 py-1.5 rounded-md capitalize ${mode === m ? "bg-brand-dark text-white" : "text-brand-dark/70 hover:bg-black/5"}`}>{m}</button>
           ))}
         </div>
+        {hasReq && (
+          <label className="inline-flex items-center gap-2 text-sm text-brand-dark/80 cursor-pointer select-none">
+            <input type="checkbox" checked={showReq} onChange={(e) => setShowReq(e.target.checked)} className="accent-[var(--brand-primary,#2563eb)]" /> Measure against requirement
+          </label>
+        )}
         <select value={section} onChange={(e) => setSection(e.target.value)} className="text-sm border border-line rounded-lg px-3 py-2 bg-white">
           <option value="all">All sections</option>
           {sections.map((s) => <option key={s.name ?? "General"} value={s.name ?? "General"}>{s.name ?? "General"}</option>)}
@@ -107,6 +120,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
               <th className="px-3 py-2.5 font-medium sticky left-14 bg-brand-accent-dull z-10 min-w-[220px]">Item</th>
               <th className="px-3 py-2.5 font-medium w-16">Unit</th>
               <th className="px-3 py-2.5 font-medium w-20 text-right">Qty</th>
+              {reqOn && <th className="px-3 py-2.5 font-medium text-right min-w-[110px] bg-brand-dark/30">Requirement<div className="text-[10px] font-normal opacity-80">{mode === "amounts" ? "amount" : "rate"}</div></th>}
               {bids.map((b) => (
                 <th key={b.documentId} className="px-3 py-2 font-medium text-right min-w-[140px]">
                   <Link href={`/tenders/${tenderId}/bids/${b.documentId}`} className="hover:underline">{b.partyName ?? "Unknown"}</Link>
@@ -123,14 +137,18 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
           </thead>
           <tbody>{rows}</tbody>
           <tfoot>
-            <Foot label="Quoted total (as printed)" bids={bids} f={(b) => formatINR(b.statedTotal, cur)} />
-            <Foot label="Like-for-like total" strong bids={bids} f={(b) => formatINR(b.likeForLikeTotal, cur)} hint="Only items every contractor priced — fair to compare" />
-            <Foot label="…over how many items" bids={bids} f={(b) => (b.likeForLikeItems ? `${b.likeForLikeItems} items` : "all priced items")} />
-            <Foot label="Everything this bid priced" bids={bids} f={(b) => formatINR(b.pricedTotal, cur)} />
-            <Foot label="Rank" bids={bids} f={(b) => `L${b.rank}`} />
-            <Foot label="Not priced / missing" bids={bids} f={(b) => `${b.notPricedCount} / ${b.missingCount}`} />
-            <Foot label="Tax" bids={bids} f={(b) => (b.taxBasis && b.taxBasis !== "unknown" ? `${b.taxBasis}${b.taxRatePercent ? ` · ${b.taxRatePercent}%` : ""}` : "not stated")} />
-            <Foot label="Items to check" bids={bids} f={(b) => String(b.issueCount)} />
+            {reqOn && <Foot label="Requirement total (same items)" bids={bids} lead={lead} f={(b) => (b.req.comparableItems ? formatINR(b.req.reqAmount, cur) : "—")} hint="The tender's own amount for exactly the items this contractor priced" />}
+            {reqOn && <Foot label="Bid vs requirement" strong bids={bids} lead={lead} f={(b) => (b.req.variancePct == null ? "—" : `${b.req.variancePct > 0 ? "+" : ""}${(b.req.variancePct * 100).toFixed(1)}%  (${formatINR(b.req.bidAmount - b.req.reqAmount, cur)})`)} hint="Over those items: positive = dearer than the requirement" />}
+            {reqOn && <Foot label="Items above / on / below requirement" bids={bids} lead={lead} f={(b) => `${b.req.over} / ${b.req.within} / ${b.req.under}`} hint={`"On" = within ±${REQ_TOLERANCE * 100}% of the requirement rate`} />}
+            {reqOn && <Foot label="Requirement fit (0-100)" strong bids={bids} lead={lead} f={(b) => `${b.req.score}  ·  #${b.req.fitRank}`} hint="Coverage 50% · quantity/unit compliance 20% · price vs requirement 30%" />}
+            <Foot label="Quoted total (as printed)" bids={bids} lead={lead} f={(b) => formatINR(b.statedTotal, cur)} />
+            <Foot label="Like-for-like total" strong bids={bids} lead={lead} f={(b) => formatINR(b.likeForLikeTotal, cur)} hint="Only items every contractor priced — fair to compare" />
+            <Foot label="…over how many items" bids={bids} lead={lead} f={(b) => (b.likeForLikeItems ? `${b.likeForLikeItems} items` : "all priced items")} />
+            <Foot label="Everything this bid priced" bids={bids} lead={lead} f={(b) => formatINR(b.pricedTotal, cur)} />
+            <Foot label="Rank" bids={bids} lead={lead} f={(b) => `L${b.rank}`} />
+            <Foot label="Not priced / missing" bids={bids} lead={lead} f={(b) => `${b.notPricedCount} / ${b.missingCount}`} />
+            <Foot label="Tax" bids={bids} lead={lead} f={(b) => (b.taxBasis && b.taxBasis !== "unknown" ? `${b.taxBasis}${b.taxRatePercent ? ` · ${b.taxRatePercent}%` : ""}` : "not stated")} />
+            <Foot label="Items to check" bids={bids} lead={lead} f={(b) => String(b.issueCount)} />
           </tfoot>
         </table>
       </div>
@@ -141,10 +159,10 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
   );
 }
 
-function Foot({ label, bids, f, strong, hint }: { label: string; bids: Comparison["bids"]; f: (b: Comparison["bids"][number]) => string; strong?: boolean; hint?: string }) {
+function Foot({ label, bids, f, strong, hint, lead }: { label: string; bids: Comparison["bids"]; lead: number; f: (b: Comparison["bids"][number]) => string; strong?: boolean; hint?: string }) {
   return (
     <tr className={`border-t ${strong ? "border-t-2 border-brand-dark/20 bg-brand-light-dull font-semibold" : "border-line"}`}>
-      <td colSpan={4} className="px-3 py-2 sticky left-0 bg-inherit" title={hint}>{label}</td>
+      <td colSpan={lead} className="px-3 py-2 sticky left-0 bg-inherit" title={hint}>{label}</td>
       {bids.map((b) => <td key={b.documentId} className="px-3 py-2 text-right tabular-nums">{f(b)}</td>)}
       <td />
     </tr>

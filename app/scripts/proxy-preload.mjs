@@ -1,0 +1,3 @@
+// Optional: route Node's fetch through HTTPS_PROXY (Node ignores it by default). Use: node --import ./scripts/proxy-preload.mjs ...
+import { setGlobalDispatcher, EnvHttpProxyAgent } from "undici";
+setGlobalDispatcher(new EnvHttpProxyAgent());

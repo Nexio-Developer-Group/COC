@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { formatINR } from "@/lib/format";
-import type { Comparison } from "@/lib/compare";
+import { REQ_TOLERANCE, type Comparison } from "@/lib/compare";
 import { Pill } from "./ui";
 
 type Card = {
@@ -45,6 +45,17 @@ export function buildScorecards(c: Comparison): Card[] {
     const { b } = k;
     if (b.rank === 1) k.strengths.push("Lowest like-for-like total (L1)");
     else if (k.gap !== null && k.gap <= 5) k.strengths.push(`Within ${k.gap.toFixed(1)}% of the lowest total`);
+    const rq = b.req;
+    if (c.requirementPricedItems > 0 && rq.variancePct != null) {
+      const v = (Math.abs(rq.variancePct) * 100).toFixed(1);
+      if (rq.variancePct <= 0) k.strengths.push(`${v}% below the requirement on ${rq.comparableItems} comparable items`);
+      else if (rq.variancePct <= REQ_TOLERANCE) k.strengths.push(`Within ${v}% of the requirement on ${rq.comparableItems} comparable items`);
+      else k.watch.push(`${v}% above the requirement on ${rq.comparableItems} comparable items`);
+    }
+    if (rq.over > 0 && rq.over >= rq.comparableItems / 2) k.watch.push(`${rq.over} of ${rq.comparableItems} rates are above the requirement rate`);
+    if (rq.qtyDeviations > 0) k.watch.push(`${rq.qtyDeviations} quantit${rq.qtyDeviations > 1 ? "ies differ" : "y differs"} from the requirement`);
+    if (rq.unitDeviations > 0) k.watch.push(`${rq.unitDeviations} unit${rq.unitDeviations > 1 ? "s differ" : " differs"} from the requirement`);
+    if (rq.uncertainMatches > 0) k.watch.push(`${rq.uncertainMatches} item${rq.uncertainMatches > 1 ? "s" : ""} only loosely matched to a requirement line`);
     if (k.lowest > 0) k.strengths.push(`Lowest rate on ${k.lowest} item${k.lowest > 1 ? "s" : ""}${k.lowest === mostLowest && cards.length > 1 ? " — most of any contractor" : ""}`);
     if (total && k.coverage === 100) k.strengths.push("Priced every BOQ item");
     else if (k.coverage >= 90) k.strengths.push(`Priced ${k.coverage}% of BOQ items`);
@@ -74,7 +85,7 @@ export default function ContractorScorecards({ comparison, tenderId }: { compari
     <section className="mb-6">
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="text-base font-semibold">Ranking &amp; contractor highlights</h2>
-        <span className="text-xs text-brand-dark/50">Worked out from the table below — no AI</span>
+        <span className="text-xs text-brand-dark/50">Worked out from the table below, measured against your requirements — no AI</span>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((k) => (
@@ -85,7 +96,10 @@ export default function ContractorScorecards({ comparison, tenderId }: { compari
                 <Link href={`/tenders/${tenderId}/bids/${k.b.documentId}`} className="font-medium text-brand-contrast hover:underline truncate block">{k.b.partyName ?? "Unknown"}</Link>
                 <div className="text-sm tabular-nums">{formatINR(k.b.likeForLikeTotal, cur)}{k.gap !== null && <span className="text-xs text-brand-dark/50"> · +{k.gap.toFixed(1)}% vs L1</span>}</div>
               </div>
-              <Pill tone="neutral">{k.coverage}% priced</Pill>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <Pill tone="neutral">{k.coverage}% priced</Pill>
+                <span title="Requirement fit: coverage 50% · quantity/unit compliance 20% · price vs requirement 30%" className="text-[11px] text-brand-dark/60">Fit {k.b.req.score}/100 · #{k.b.req.fitRank}</span>
+              </div>
             </div>
             <Link href={`/tenders/${tenderId}/compare/${k.b.documentId}`} className="text-xs text-brand-contrast hover:underline -mt-1">Compare with requirements →</Link>
             <ul className="space-y-1 text-sm">

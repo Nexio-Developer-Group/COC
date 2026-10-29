@@ -15,6 +15,10 @@ export type ComparisonCell = {
   converted?: string | null;
   images?: number;
   qtyMismatch?: boolean;
+  /** quoted rate vs the requirement's own rate, as a fraction (0.1 = 10% above); null if either side has no rate */
+  rateVsReq?: number | null;
+  /** the bid quotes in a different unit than the requirement (and it could not be converted) */
+  unitDiffers?: boolean;
 };
 
 export type ComparisonItemRow = {
@@ -56,7 +60,33 @@ export type ComparisonBidSummary = {
   imageCount: number;
   terms: { category: string; text: string; value: string | null }[];
   rank: number;
+  /** how well this bid meets the tender's own requirements (BOQ) */
+  req: RequirementFit;
 };
+
+export type RequirementFit = {
+  /** share of requirement items this bid priced */
+  coveragePct: number;
+  /** requirement items with a reference rate that this bid also priced */
+  comparableItems: number;
+  /** requirement amount / bid amount over exactly those items */
+  reqAmount: number;
+  bidAmount: number;
+  /** (bid - requirement) / requirement over the comparable items; positive = bid is dearer than the requirement */
+  variancePct: number | null;
+  over: number;
+  under: number;
+  within: number;
+  qtyDeviations: number;
+  unitDeviations: number;
+  uncertainMatches: number;
+  /** 0-100: coverage 50% · quantity/unit compliance 20% · price vs requirement 30% (re-weighted if the BOQ has no rates) */
+  score: number;
+  fitRank: number;
+};
+
+/** a quote within this share of the requirement rate counts as "on requirement" */
+export const REQ_TOLERANCE = 0.05;
 
 export type Comparison = {
   tenderId: string;
@@ -65,6 +95,12 @@ export type Comparison = {
   sections: { name: string | null; itemCodes: string[] }[];
   items: ComparisonItemRow[];
   bids: ComparisonBidSummary[];
+  /** total of the requirement's own amounts (items that carry one) */
+  requirementTotal: number;
+  /** the requirement document prints its own grand total */
+  requirementStatedTotal: number | null;
+  /** how many requirement items have a reference rate to compare bids against */
+  requirementPricedItems: number;
   extraItems: { documentId: string; partyName: string | null; name: string | null; unit: string | null; quantity: number | null; rate: number | null; amount: number | null }[];
 };
 
@@ -201,6 +237,8 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
         converted: line.converted ? `${line.converted.from} → ${line.converted.to}` : null,
         images: imgByLine.get(line.id) ?? 0,
         qtyMismatch,
+        rateVsReq: line.rate != null && row.tenderRate != null && row.tenderRate !== 0 ? (Number(line.rate) - row.tenderRate) / row.tenderRate : null,
+        unitDiffers: !!row.unit && !!line.unit && row.unit !== line.unit,
       };
     }
 
@@ -232,6 +270,7 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
       imageCount: imgRows?.length ?? 0,
       terms: bidDoc.terms ?? [],
       rank: 0,
+      req: { coveragePct: 0, comparableItems: 0, reqAmount: 0, bidAmount: 0, variancePct: null, over: 0, under: 0, within: 0, qtyDeviations: 0, unitDeviations: 0, uncertainMatches: 0, score: 0, fitRank: 0 },
     });
   }
 
@@ -252,6 +291,41 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
     const target = bids.find((x) => x.documentId === b.documentId);
     if (target) target.rank = idx + 1;
   });
+
+  // How each bid measures up against the tender's own requirements.
+  const refItems = items.filter((i) => i.tenderRate != null && i.tenderAmount != null);
+  for (const b of bids) {
+    const r = b.req;
+    let priced = 0;
+    for (const item of items) {
+      const c = item.cells[b.documentId];
+      if (!c) continue;
+      if (c.status === "priced") priced++;
+      if (c.status === "priced" || c.status === "included") {
+        if (c.qtyMismatch) r.qtyDeviations++;
+        if (c.unitDiffers) r.unitDeviations++;
+        if (c.matchConfidence === "low" || c.matchConfidence === "conflict") r.uncertainMatches++;
+      }
+    }
+    for (const item of refItems) {
+      const c = item.cells[b.documentId];
+      if (c?.status !== "priced" || c.amount == null) continue;
+      r.comparableItems++;
+      r.reqAmount += item.tenderAmount as number;
+      r.bidAmount += c.amount;
+      const d = c.rateVsReq;
+      if (d == null) continue;
+      if (d > REQ_TOLERANCE) r.over++;
+      else if (d < -REQ_TOLERANCE) r.under++;
+      else r.within++;
+    }
+    r.coveragePct = items.length ? Math.round((priced / items.length) * 100) : 0;
+    r.variancePct = r.reqAmount > 0 ? (r.bidAmount - r.reqAmount) / r.reqAmount : null;
+    const compliance = priced ? Math.max(0, 1 - (r.qtyDeviations + r.unitDeviations) / priced) : 0;
+    const budget = r.variancePct == null ? null : r.variancePct <= 0 ? 1 : Math.max(0, 1 - r.variancePct * 5);
+    r.score = Math.round(budget == null ? (r.coveragePct * 0.7 + compliance * 100 * 0.3) : r.coveragePct * 0.5 + compliance * 100 * 0.2 + budget * 100 * 0.3);
+  }
+  [...bids].sort((a, b) => b.req.score - a.req.score).forEach((b, idx) => { b.req.fitRank = idx + 1; });
 
   for (const row of items) {
     const rates = Object.values(row.cells)
@@ -274,6 +348,9 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
     sections,
     items,
     bids,
+    requirementTotal: refItems.reduce((t, i) => t + (i.tenderAmount as number), 0),
+    requirementStatedTotal: tenderDoc?.stated_total == null ? null : Number(tenderDoc.stated_total),
+    requirementPricedItems: refItems.length,
     extraItems,
   };
 }

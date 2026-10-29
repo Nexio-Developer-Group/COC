@@ -74,7 +74,7 @@ export function comparisonSheets(c: Comparison): Sheet[] {
       currentSection = item.sectionName;
       rows.push({ band: true, cells: { code: "", item: currentSection ?? "General" } });
     }
-    const cells: Row["cells"] = { code: item.itemCode, item: item.name ?? "", unit: item.unit, qty: item.quantity };
+    const cells: Row["cells"] = { code: item.itemCode, item: item.name ?? "", unit: item.unit, qty: item.quantity, req: item.tenderRate };
     for (const b of bids) {
       const x = item.cells[b.documentId];
       let v: string | number | null = "×";
@@ -99,6 +99,12 @@ export function comparisonSheets(c: Comparison): Sheet[] {
     rows.push({ indent: true, cells });
   }
   const sumRow = (label: string, f: (b: (typeof bids)[number]) => string | number | null): Row => ({ total: true, cells: { item: label, ...Object.fromEntries(bids.map((b) => [b.documentId, f(b)])) } });
+  if (c.requirementPricedItems > 0) {
+    rows.push(sumRow("Requirement total (same items)", (b) => (b.req.comparableItems ? b.req.reqAmount : null)));
+    rows.push(sumRow("Bid vs requirement", (b) => (b.req.variancePct == null ? null : `${b.req.variancePct > 0 ? "+" : ""}${(b.req.variancePct * 100).toFixed(1)}%`)));
+    rows.push(sumRow("Items above / on / below requirement", (b) => `${b.req.over} / ${b.req.within} / ${b.req.under}`));
+    rows.push(sumRow("Requirement fit (0-100)", (b) => `${b.req.score} (#${b.req.fitRank})`));
+  }
   rows.push(sumRow("Quoted total (as printed)", (b) => b.statedTotal));
   rows.push(sumRow("Like-for-like total", (b) => b.likeForLikeTotal));
   rows.push(sumRow("Rank", (b) => `L${b.rank}`));
@@ -109,6 +115,7 @@ export function comparisonSheets(c: Comparison): Sheet[] {
     { key: "item", label: "Item", width: 30 },
     { key: "unit", label: "Unit", width: 9 },
     { key: "qty", label: "Qty", width: 11, kind: "qty" },
+    { key: "req", label: "Requirement rate", width: 14, kind: "money" as const },
     ...bids.map((b) => ({ key: b.documentId, label: `${b.partyName ?? "Unknown"} (L${b.rank}${b.versionNo > 1 ? `, v${b.versionNo}` : ""})`, width: 17, kind: "money" as const })),
   ];
   const main: Sheet = { name: "Comparative Statement", title: `Comparative Statement - ${c.tenderTitle}`, columns, rows, notes: ["Green = lowest rate, orange = highest, blue = calculated for you, teal = unit converted, yellow = client-supplied material / labour only, pink = unrealistic value."] };
