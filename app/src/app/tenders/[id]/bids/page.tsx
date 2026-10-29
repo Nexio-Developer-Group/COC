@@ -30,7 +30,7 @@ export default function BidsPage() {
       ) : (
         <Card className="overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-brand-light/60 text-left text-xs text-brand-dark/60"><tr><th className="px-4 py-2.5 font-medium">Contractor</th><th className="px-4 py-2.5 font-medium">File</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium text-right">Sum of lines</th><th className="px-4 py-2.5 font-medium text-right">As printed</th><th className="px-4 py-2.5 font-medium">Uploaded</th></tr></thead>
+            <thead className="bg-brand-light/60 text-left text-xs text-brand-dark/60"><tr><th className="px-4 py-2.5 font-medium">Contractor</th><th className="px-4 py-2.5 font-medium">File</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium text-right">Sum of lines</th><th className="px-4 py-2.5 font-medium text-right">As printed</th><th className="px-4 py-2.5 font-medium">Uploaded</th><th className="px-4 py-2.5"></th></tr></thead>
             <tbody>
               {bids.map((b) => {
                 const st = statusPill(b.status);
@@ -42,6 +42,7 @@ export default function BidsPage() {
                     <td className="px-4 py-3 text-right tabular-nums">{formatINR(b.computed_total == null ? null : Number(b.computed_total), cur)}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-brand-dark/55">{formatINR(b.stated_total == null ? null : Number(b.stated_total), cur)}</td>
                     <td className="px-4 py-3 text-brand-dark/50">{new Date(b.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-right"><Link href={`/tenders/${id}/compare/${b.id}`}><Button size="sm" icon="scale">Compare</Button></Link></td>
                   </tr>
                 );
               })}

@@ -24,6 +24,10 @@ export type ComparisonItemRow = {
   name: string | null;
   unit: string | null;
   quantity: number | null;
+  /** the requirement's own rate / amount — the reference every bid is measured against */
+  tenderRate: number | null;
+  tenderAmount: number | null;
+  sheetName: string | null;
   sectionName: string | null;
   minRate: number | null;
   maxRate: number | null;
@@ -110,6 +114,9 @@ export async function buildComparison(tenderId: string): Promise<Comparison | nu
     name: t.name,
     unit: t.unit,
     quantity: t.quantity,
+    tenderRate: t.rate == null ? null : Number(t.rate),
+    tenderAmount: t.amount != null ? Number(t.amount) : t.rate != null && t.quantity != null ? Number(t.rate) * Number(t.quantity) : null,
+    sheetName: t.sheet_name,
     sectionName: t.parent_id ? sectionsById.get(t.parent_id)?.name ?? null : null,
     minRate: null,
     maxRate: null,

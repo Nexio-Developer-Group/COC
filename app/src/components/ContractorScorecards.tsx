@@ -87,6 +87,7 @@ export default function ContractorScorecards({ comparison, tenderId }: { compari
               </div>
               <Pill tone="neutral">{k.coverage}% priced</Pill>
             </div>
+            <Link href={`/tenders/${tenderId}/compare/${k.b.documentId}`} className="text-xs text-brand-contrast hover:underline -mt-1">Compare with requirements →</Link>
             <ul className="space-y-1 text-sm">
               {k.strengths.length === 0 && <li className="text-brand-dark/40">No standout strengths yet.</li>}
               {k.strengths.map((s) => <li key={s} className="flex gap-2"><span className="text-green-700 shrink-0">✓</span><span>{s}</span></li>)}
