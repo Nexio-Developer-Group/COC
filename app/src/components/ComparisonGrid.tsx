@@ -112,6 +112,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
                   <Link href={`/tenders/${tenderId}/bids/${b.documentId}`} className="hover:underline">{b.partyName ?? "Unknown"}</Link>
                   <div className="flex items-center justify-end gap-1 mt-0.5">
                     <span className="text-[10px] bg-white/20 rounded px-1.5">L{b.rank}</span>
+                    <Link href={`/tenders/${tenderId}/compare/${b.documentId}`} className="text-[10px] bg-white/20 hover:bg-white/35 rounded px-1.5">vs BOQ</Link>
                     {b.versionNo > 1 && <span className="text-[10px] bg-white/20 rounded px-1.5">v{b.versionNo}</span>}
                     {b.status !== "ready" && <span className="text-[10px] bg-amber-400 text-black rounded px-1.5">review</span>}
                   </div>
