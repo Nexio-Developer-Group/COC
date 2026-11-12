@@ -296,6 +296,14 @@ async function finalize(doc: Document): Promise<StepResult> {
       issues.push({ code: "sheet_skipped", severity: "info", category: "ingest", message: `Sheet "${s.name}" looks like a ${s.kind} page, so its ${n} line(s) were not counted as items.` });
       continue;
     }
+    if ((s as unknown as { source_audit?: { parse?: unknown } }).source_audit?.parse) {
+      // read straight from the cells: every category stays its own, every item stays exactly where the sheet has it
+      for (const sec of ex.sections) {
+        for (const it of sec.items) itemSheet.set(it, s.name);
+        merged.push({ name: sec.name, source_ref: sec.source_ref, trade: sec.trade, sheet: s.name, items: [...sec.items] });
+      }
+      continue;
+    }
     const base = s.name.split(" (part")[0];
     ex.sections.forEach((sec, secIdx) => {
       // drop rows a later chunk repeated from an earlier one (same sheet, same printed row)
@@ -324,16 +332,49 @@ async function finalize(doc: Document): Promise<StepResult> {
     // the document's printed total is the sum of each sheet's own closing "Total Amount…" line (never a single section/room subtotal)
     header = { ...header, stated_total: printed.every((p) => p.pr.printedGrandTotal?.amount != null) ? printed.reduce((t, p) => t + (p.pr.printedGrandTotal!.amount as number), 0) : null };
   }
+  const money = (n: number) => n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  const tolOf = (n: number) => Math.max(1, Math.abs(n) * 0.005);
+  const amountOf = (it: ExtractedItem) => { const p = it.prices[0]; return p?.amount ?? (it.quantity != null && p?.rate != null ? it.quantity * p.rate : 0); };
   for (const { sheet, pr } of printed) {
-    const tol = (n: number) => Math.max(1, Math.abs(n) * 0.005);
-    const g = pr.printedGrandTotal;
-    if (g?.amount != null && Math.abs(pr.itemsTotal - g.amount) > tol(g.amount)) {
-      issues.push({ code: "sheet_total_mismatch", severity: "warn", category: "totals", message: `"${sheet}": the printed "${g.label}" (${g.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}) differs from what its items add up to (${pr.itemsTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}). Check for stale or missing amounts.` });
-    } else if (!g || g.amount == null) {
-      issues.push({ code: "sheet_total_unavailable", severity: "info", category: "totals", message: `"${sheet}": the closing total line has no saved value, so the items could not be reconciled against it.` });
+    // categories of this sheet, in order, exactly as the reader produced them
+    const secs = merged.filter((m) => m.sheet.split(" (part")[0] === sheet.split(" (part")[0]);
+    // ---- rows that fit no rule are never dropped silently ----
+    if (pr.unrecognised.length) issues.push({ code: "row_unrecognised", severity: "error", category: "ingest", message: `"${sheet}": ${pr.unrecognised.length} row(s) could not be classified with certainty and need a look — ${pr.unrecognised.slice(0, 4).map((u) => `row ${u.row}: ${u.text.slice(0, 90)}`).join("; ")}${pr.unrecognised.length > 4 ? " …" : ""}.` });
+    if (pr.unattachedNotes.length) issues.push({ code: "note_without_item", severity: "warn", category: "ingest", message: `"${sheet}": ${pr.unattachedNotes.length} note row(s) sit before any item in their category (rows ${pr.unattachedNotes.slice(0, 8).join(", ")}) — kept, but not attached to an item.` });
+    if (pr.helperRows.length) issues.push({ code: "values_outside_table", severity: "info", category: "ingest", message: `"${sheet}": ${pr.helperRows.length} row(s) hold numbers only outside the item table (rows ${pr.helperRows.slice(0, 8).join(", ")}) — not treated as items.` });
+    // ---- every category's printed total against its own items ----
+    pr.sections.forEach((x, i) => {
+      if (x.labelMismatch) issues.push({ code: "category_total_label_mismatch", severity: "error", category: "totals", message: `"${sheet}": the total line "${x.totalLabel}" (row ${x.totalRow}) sits under the category "${x.name}" — they don't look like the same category. Check that no category was merged or skipped.` });
+      if (x.printedTotals > 1) issues.push({ code: "category_total_repeated", severity: "warn", category: "totals", message: `"${sheet}": category "${x.name}" has ${x.printedTotals} total lines; the last one (row ${x.totalRow}) is used.` });
+      if (x.printedTotal == null) return;
+      const diff = x.itemTotal - x.printedTotal;
+      if (Math.abs(diff) <= tolOf(x.printedTotal)) return;
+      const its = secs[i]?.items ?? [];
+      const culprit = its.find((it) => Math.abs(amountOf(it) - Math.abs(diff)) <= tolOf(diff));
+      const why = culprit ? ` The difference equals row ${culprit.source_row} (${culprit.name ?? "item"}, ${money(amountOf(culprit))}) — the printed subtotal ${diff > 0 ? "leaves it out" : "counts it twice"}.` : "";
+      issues.push({ code: "category_total_mismatch", severity: "error", category: "totals", message: `"${sheet}" · ${x.name}: printed total ${money(x.printedTotal)} but its ${x.items} item(s) add up to ${money(x.itemTotal)} (difference ${money(diff)}).${why}` });
+    });
+    // categories that have items but no printed total, in a sheet where other categories do have one
+    const someTotals = pr.sections.some((x) => x.printedTotal != null);
+    const noTotal = pr.sections.filter((x) => x.printedTotal == null && x.items > 0);
+    if (someTotals && noTotal.length) issues.push({ code: "category_total_missing", severity: "warn", category: "totals", message: `"${sheet}": ${noTotal.length} categor${noTotal.length > 1 ? "ies have" : "y has"} no printed total to check against (${noTotal.slice(0, 5).map((x) => x.name).join(", ")}).` });
+    // ---- the closing lines: gross total, discount(s), net ----
+    const gross = pr.footer.find((f) => f.kind === "total" && f.amount != null);
+    if (gross && Math.abs(pr.itemsTotal - gross.amount!) > tolOf(gross.amount!)) {
+      issues.push({ code: "sheet_total_mismatch", severity: "error", category: "totals", message: `"${sheet}": the printed "${gross.label}" (${money(gross.amount!)}) differs from what its items add up to (${money(pr.itemsTotal)}). Check for stale or missing amounts.` });
+    } else if (!gross) {
+      issues.push({ code: "sheet_total_unavailable", severity: "warn", category: "totals", message: `"${sheet}": the closing "Total Amount…" line has no saved value, so the items could not be reconciled against it.` });
     }
-    const off = pr.sections.filter((x) => x.printedTotal != null && Math.abs(x.itemTotal - x.printedTotal) > tol(x.printedTotal));
-    if (off.length) issues.push({ code: "section_total_mismatch", severity: "warn", category: "totals", message: `"${sheet}": ${off.length} section subtotal(s) differ from their items — ${off.slice(0, 4).map((x) => `${x.name}: printed ${Math.round(x.printedTotal!).toLocaleString("en-IN")} vs items ${Math.round(x.itemTotal).toLocaleString("en-IN")}`).join("; ")}${off.length > 4 ? " …" : ""}.` });
+    const discounts = pr.footer.filter((f) => f.kind === "discount" && f.amount != null);
+    const last = pr.footer.length ? pr.footer[pr.footer.length - 1] : null;
+    if (gross && discounts.length && last && last !== gross && last.kind !== "discount" && last.amount != null) {
+      const expected = gross.amount! - discounts.reduce((t, d) => t + d.amount!, 0);
+      if (Math.abs(expected - last.amount) > tolOf(expected)) issues.push({ code: "net_total_mismatch", severity: "error", category: "totals", message: `"${sheet}": total ${money(gross.amount!)} less discount ${money(discounts.reduce((t, d) => t + d.amount!, 0))} should be ${money(expected)}, but the printed net is ${money(last.amount)}.` });
+    }
+    // ---- nothing may be lost between reading and storing ----
+    const read = merged.filter((m) => m.sheet.split(" (part")[0] === sheet.split(" (part")[0]);
+    const kept = read.reduce((n, m) => n + m.items.length, 0);
+    if (kept !== pr.counts.items || read.length !== pr.sections.length) issues.push({ code: "extraction_incomplete", severity: "error", category: "ingest", message: `"${sheet}": the reader found ${pr.sections.length} categories / ${pr.counts.items} items but ${read.length} / ${kept} were kept. Please report this.` });
   }
 
   // names the AI left empty are restored from the sheet's own name column
@@ -349,7 +390,7 @@ async function finalize(doc: Document): Promise<StepResult> {
 
   // price options straight from the cells (rate columns paired with the amount that equals qty x rate)
   const sheetText = new Map(sheets.map((x) => [x.name, (x as unknown as { rendered_text?: string }).rendered_text ?? ""]));
-  const vr = deriveVariants(merged.flatMap((m) => m.items.map((item) => ({ item, sheetText: sheetText.get(itemSheet.get(item) ?? m.sheet) ?? "" }))));
+  const vr = deriveVariants(merged.filter((m) => !parsedKeys.has(m.sheet.split(" (part")[0])).flatMap((m) => m.items.map((item) => ({ item, sheetText: sheetText.get(itemSheet.get(item) ?? m.sheet) ?? "" }))));
   if (vr) {
     for (const m of merged) for (const item of m.items) { const pr = vr.perItem.get(item); if (pr) item.prices = pr; }
     Object.assign(variantLabels, vr.labels);
@@ -412,8 +453,14 @@ async function finalize(doc: Document): Promise<StepResult> {
       attributes: {}, extraction_confidence: null, cell_meta: { trade: { src: "ai", note: "Trade category was inferred by AI", at: stamp } }, anomalies: [], converted: null, sheet_name: sec.sheet.split(" (part")[0], source_row: null, edited_at: null,
       tender_line_id: null, match_method: null, match_confidence: null, match_note: null,
     });
+    let topN = 0, subK = 0, topCode = "";
     sec.items.forEach((item, ii) => {
       pos++;
+      const at = (item.attributes ?? {}) as Record<string, unknown>;
+      const isSub = !!(at.sub_line_of || at.continuation_of) && topCode !== "";
+      const code = isSub ? `${topCode}.${++subK}` : `${si + 1}.${++topN}`;
+      if (!isSub) { subK = 0; topCode = code; }
+      const parentCode = isSub ? topCode : null;
       const primary = item.prices.find((p) => p.variant === primaryVariant) ?? item.prices[0] ?? null;
       let tenderLineId: string | null = null;
       let mm: LineItem["match_method"] = null;
@@ -426,12 +473,12 @@ async function finalize(doc: Document): Promise<StepResult> {
         mm = m?.match_method ?? null;
         mc = m?.match_confidence ?? null;
         mn = isContinuation && tenderLineId ? "Additional line on the same BOQ item as the row above (amounts are added together)" : m?.match_note ?? null;
-        if (!tenderLineId) issues.push({ code: "unmatched_bid_item", severity: "info", category: "match", message: `${si + 1}.${ii + 1} ${item.name ?? ""} doesn't match any BOQ item — shown as an extra item offered.` });
+        if (!tenderLineId) issues.push({ code: "unmatched_bid_item", severity: "info", category: "match", message: `${code} ${item.name ?? ""} doesn't match any BOQ item — shown as an extra item offered.` });
       }
       lines.push({
-        id: crypto.randomUUID(), document_id: doc.id, parent_id: sectionId, kind: "item", position: pos, item_code: `${si + 1}.${ii + 1}`, source_ref: item.source_ref, name: item.name,
+        id: crypto.randomUUID(), document_id: doc.id, parent_id: sectionId, kind: "item", position: pos, item_code: code, source_ref: item.source_ref, name: item.name,
         description: item.description, trade: null, unit_raw: item.unit, unit: normalizeUnit(item.unit), quantity: item.quantity, rate: primary?.rate ?? null, amount: primary?.amount ?? null,
-        prices: item.prices, quote_status: item.quote_status, flags: item.flags, remarks: item.remarks, attributes: item.attributes ?? {}, extraction_confidence: "high",
+        prices: item.prices, quote_status: item.quote_status, flags: item.flags, remarks: item.remarks, attributes: { ...(item.attributes ?? {}), ...(parentCode ? { parent_code: parentCode } : {}), uid: `${sec.sheet.split(" (part")[0]}|${sec.name ?? ""}|${item.source_ref ?? "-"}|r${item.source_row ?? "?"}` }, extraction_confidence: "high",
         cell_meta: {}, anomalies: [], converted: null, sheet_name: sec.sheet.split(" (part")[0], source_row: item.source_row ?? null, edited_at: null,
         tender_line_id: tenderLineId, match_method: mm, match_confidence: mc, match_note: mn,
       });

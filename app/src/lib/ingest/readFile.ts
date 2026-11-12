@@ -1,4 +1,5 @@
 import { parseBoqSheet, type ParsedBoq, type SheetPreview } from "./boqParser";
+import { readCachedValues, type Cached } from "./xlsxCache";
 import { evaluateCellFormula, UnsupportedFormula } from "./cellFormula";
 import ExcelJS from "exceljs";
 import mammoth from "mammoth";
@@ -114,7 +115,7 @@ const numOf = (v: ExcelJS.CellValue): number | null => {
 };
 
 /** Re-checks every formula in a sheet against its own cached result, using only the sheet's other cell values. */
-function auditSheet(sheet: ExcelJS.Worksheet): SheetAudit {
+function auditSheet(sheet: ExcelJS.Worksheet, cache?: Map<string, Cached>): SheetAudit {
   const audit: SheetAudit = { formulaCount: 0, mismatches: [], unverified: [], uncached: [], errors: [] };
   const get = (address: string) => numOf(sheet.getCell(address).value);
   sheet.eachRow({ includeEmpty: false }, (row) => {
@@ -129,7 +130,11 @@ function auditSheet(sheet: ExcelJS.Worksheet): SheetAudit {
       audit.formulaCount++;
       let formula = "";
       try { formula = String(cell.formula ?? ""); } catch { formula = String((v as { formula?: string }).formula ?? ""); }
-      const result = (v as { result?: unknown }).result;
+      let result = (v as { result?: unknown }).result;
+      if (result === undefined || result === null) {
+        const c = cache?.get(cell.address);
+        if (c) result = c.e !== undefined ? { error: c.e } : c.n !== undefined ? c.n : c.s;
+      }
       if (result && typeof result === "object" && "error" in (result as object)) {
         if (audit.errors.length < AUDIT_CAP) audit.errors.push({ a: cell.address, text: String((result as { error: string }).error) });
         return;
@@ -154,8 +159,8 @@ function auditSheet(sheet: ExcelJS.Worksheet): SheetAudit {
   return audit;
 }
 
-function safeParse(sheet: ExcelJS.Worksheet): ParsedBoq | null {
-  try { return parseBoqSheet(sheet); } catch { return null; }
+function safeParse(sheet: ExcelJS.Worksheet, cache?: Map<string, Cached>): ParsedBoq | null {
+  try { return parseBoqSheet(sheet, cache); } catch { return null; }
 }
 
 async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: ExtractedImage[] }> {
@@ -167,6 +172,7 @@ async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: 
     // some drawing layouts crash the cell parser; the cells themselves are still readable without them
     await wb.xlsx.load((await stripDrawings(buffer)) as unknown as ExcelJS.Buffer);
   }
+  const cached = await readCachedValues(buffer);
   const sheets: SheetText[] = [];
   wb.eachSheet((sheet) => {
     const lines: string[] = [];
@@ -182,7 +188,7 @@ async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: 
       if (parts.length) lines.push(`R${rowNumber} | ${parts.join(" | ")}`);
     });
     const imageCount = images.filter((i) => i.sheetName === sheet.name).length;
-    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount, audit: auditSheet(sheet), parsed: safeParse(sheet) ?? undefined });
+    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount, audit: auditSheet(sheet, cached.get(sheet.name)), parsed: safeParse(sheet, cached.get(sheet.name)) ?? undefined });
   });
   return { sheets, images };
 }
