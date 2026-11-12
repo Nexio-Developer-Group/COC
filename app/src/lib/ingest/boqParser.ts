@@ -106,6 +106,19 @@ const SR = /^\d+(\.\d+)*[a-z]?\.?$/i;
 const SUB_SR = /^(\([a-z]{1,3}\)|[a-z]{1,3}[.)])$/i;
 const TOTAL_LABEL = /^\s*((grand\s+|g[-\s]?)?total|net\s+(payable|amount|total)|final\s+total)\b/i;
 const DISCOUNT_LABEL = /^\s*(special\s+)?(discount|rebate)\b/i;
+/** edit distance, for telling a typo ("Carpentary") from a different category */
+function lev(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+/** the same category, allowing spelling/spacing/plural differences */
+function sameCategory(a: string, b: string): boolean {
+  if (!a || !b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return 1 - lev(a, b) / Math.max(a.length, b.length) >= 0.75;
+}
 const stem = (t: string) => t.toLowerCase().replace(/\b(total|work|works|the|of|and|&)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim().replace(/s\b/g, "");
 
 export function parseBoqSheet(sheet: ExcelJS.Worksheet, cache?: Map<string, Cached>): ParsedBoq | null {
@@ -226,7 +239,7 @@ export function parseBoqSheet(sheet: ExcelJS.Worksheet, cache?: Map<string, Cach
           if (amt != null) curPrev.printedTotal = amt;
           // "Total Doors Work" must belong to the "Doors" category directly above it; a bare "Total" always does
           const s = stem(label);
-          if (s && s !== "" && !(stem(curPrev.name).includes(s) || s.includes(stem(curPrev.name)))) curPrev.labelMismatch = true;
+          if (s && !sameCategory(stem(curPrev.name), s)) curPrev.labelMismatch = true;
         }
       }
       lastItem = null;

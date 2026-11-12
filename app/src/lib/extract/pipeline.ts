@@ -333,7 +333,7 @@ async function finalize(doc: Document): Promise<StepResult> {
     header = { ...header, stated_total: printed.every((p) => p.pr.printedGrandTotal?.amount != null) ? printed.reduce((t, p) => t + (p.pr.printedGrandTotal!.amount as number), 0) : null };
   }
   const money = (n: number) => n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
-  const tolOf = (n: number) => Math.max(1, Math.abs(n) * 0.005);
+  const tolOf = (n: number) => Math.max(1, Math.abs(n) * 0.00002); // rounding noise only
   const amountOf = (it: ExtractedItem) => { const p = it.prices[0]; return p?.amount ?? (it.quantity != null && p?.rate != null ? it.quantity * p.rate : 0); };
   for (const { sheet, pr } of printed) {
     // categories of this sheet, in order, exactly as the reader produced them

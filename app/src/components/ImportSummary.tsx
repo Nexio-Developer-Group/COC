@@ -27,7 +27,7 @@ export default function ImportSummary({ sheets, currency }: { sheets: DocumentSh
           {parsed.map((s) => {
             const p = s.source_audit!.parse!;
             const g = p.printedGrandTotal;
-            const ok = g?.amount != null && Math.abs(g.amount - p.itemsTotal) <= Math.max(1, Math.abs(g.amount) * 0.005);
+            const ok = g?.amount != null && Math.abs(g.amount - p.itemsTotal) <= Math.max(1, Math.abs(g.amount) * 0.00002);
             return (
               <div key={s.id} className="border border-line rounded-lg p-3">
                 <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -50,7 +50,7 @@ export default function ImportSummary({ sheets, currency }: { sheets: DocumentSh
                   <thead className="text-brand-dark/50 text-left"><tr><th className="py-1 pr-3 font-medium">Section (work head)</th><th className="py-1 pr-3 font-medium text-right">Items</th><th className="py-1 pr-3 font-medium text-right">Items add up to</th><th className="py-1 font-medium text-right">Printed subtotal</th></tr></thead>
                   <tbody>
                     {p.sections.map((x) => {
-                      const bad = x.labelMismatch || (x.printedTotal != null && Math.abs(x.printedTotal - x.itemTotal) > Math.max(1, Math.abs(x.printedTotal) * 0.005));
+                      const bad = x.labelMismatch || (x.printedTotal != null && Math.abs(x.printedTotal - x.itemTotal) > Math.max(1, Math.abs(x.printedTotal) * 0.00002));
                       return (
                         <tr key={x.row} className="border-t border-line">
                           <td className="py-1 pr-3">{x.name}<span className="text-brand-dark/40"> · row {x.row}</span>{x.labelMismatch && <span className="text-red-700"> · total line "{x.totalLabel}" doesn't match</span>}</td>
