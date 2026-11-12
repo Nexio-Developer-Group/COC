@@ -106,6 +106,7 @@ export type DocumentSheet = {
   status: string;
   error: string | null;
   image_count: number;
+  source_audit?: import("@/lib/ingest/readFile").SheetAudit | null;
 };
 
 export type DocumentImage = {

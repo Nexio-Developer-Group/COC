@@ -1,3 +1,4 @@
+import { parseBoqSheet, type ParsedBoq, type SheetPreview } from "./boqParser";
 import { evaluateCellFormula, UnsupportedFormula } from "./cellFormula";
 import ExcelJS from "exceljs";
 import mammoth from "mammoth";
@@ -22,6 +23,8 @@ export type SheetAudit = {
   /** formulas saved without any cached result */
   uncached: string[];
   errors: { a: string; text: string }[];
+  /** layout the deterministic reader found (columns, sections, counts, printed vs computed totals) */
+  parse?: SheetPreview;
 };
 
 export type SheetText = {
@@ -30,6 +33,8 @@ export type SheetText = {
   rowCount: number;
   imageCount: number;
   audit?: SheetAudit;
+  /** set when the sheet has a classic BOQ layout and was read without AI */
+  parsed?: ParsedBoq;
 };
 
 export type ReadResult = {
@@ -149,6 +154,10 @@ function auditSheet(sheet: ExcelJS.Worksheet): SheetAudit {
   return audit;
 }
 
+function safeParse(sheet: ExcelJS.Worksheet): ParsedBoq | null {
+  try { return parseBoqSheet(sheet); } catch { return null; }
+}
+
 async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: ExtractedImage[] }> {
   const images = await extractXlsxImages(buffer).catch(() => [] as ExtractedImage[]);
   const wb = new ExcelJS.Workbook();
@@ -173,7 +182,7 @@ async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: 
       if (parts.length) lines.push(`R${rowNumber} | ${parts.join(" | ")}`);
     });
     const imageCount = images.filter((i) => i.sheetName === sheet.name).length;
-    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount, audit: auditSheet(sheet) });
+    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount, audit: auditSheet(sheet), parsed: safeParse(sheet) ?? undefined });
   });
   return { sheets, images };
 }

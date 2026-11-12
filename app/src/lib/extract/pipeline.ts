@@ -78,19 +78,43 @@ async function prepare(doc: Document): Promise<StepResult> {
     return { done: true, phase: "failed", detail: "Unreadable file", total: 0, completed: 0 };
   }
 
-  const chunks = read.sheets.flatMap((s) => chunkSheet(s));
-  if (chunks.length === 0 && read.images.length === 0) {
+  // sheets with a classic BOQ layout are read straight from the cells (no AI); the rest go through the AI reader
+  const parsedSheets = read.sheets.filter((s) => s.parsed);
+  const chunks = read.sheets.filter((s) => !s.parsed).flatMap((s) => chunkSheet(s));
+  if (chunks.length === 0 && parsedSheets.length === 0 && read.images.length === 0) {
     await fail(doc.id, "The file has no readable content.");
     return { done: true, phase: "failed", detail: "Empty file", total: 0, completed: 0 };
   }
 
   if (read.images.length) await storeImages({ tenderId: doc.tender_id, documentId: doc.id, images: read.images, origin: "embedded" });
 
+  if (parsedSheets.length) {
+    await db.from("document_sheets").insert(
+      parsedSheets.map((sh, i) => {
+        const p = sh.parsed!;
+        const extraction: Extraction = {
+          schema_version: "deterministic-1",
+          document: {
+            detected_kind: "unknown", title: p.sheetTitle, project_name: p.projectName,
+            party: { name: null, address: null, contact: null, tax_id: null },
+            document_date: null, reference_no: null, currency: null, tax_basis: p.preview.taxNote ?? "unknown", tax_rate_percent: null,
+            stated_total: null, price_variant_labels: {}, sheet_kind: "boq",
+          },
+          sections: p.sections, terms: [], notes_for_reviewer: [],
+        };
+        return {
+          document_id: doc.id, idx: i, name: sh.name, kind: "boq", row_count: sh.rowCount, rendered_text: sh.text, image_count: sh.imageCount,
+          raw_output: extraction, status: "done", source_audit: { ...(sh.audit ?? { formulaCount: 0, mismatches: [], unverified: [], uncached: [], errors: [] }), parse: p.preview },
+        };
+      })
+    );
+  }
+  const offset = parsedSheets.length;
   if (chunks.length) {
     await db.from("document_sheets").insert(
       chunks.map((c, i) => ({
         document_id: doc.id,
-        idx: i,
+        idx: offset + i,
         name: c.name,
         row_count: c.rowCount,
         rendered_text: c.text,
@@ -101,11 +125,12 @@ async function prepare(doc: Document): Promise<StepResult> {
       }))
     );
   }
-  const combined = chunks.map((c) => `=== ${c.name} ===\n${c.text}`).join("\n\n");
+  const combined = [...parsedSheets.map((x) => ({ name: x.name, text: x.text })), ...chunks].map((c) => `=== ${c.name} ===\n${c.text}`).join("\n\n");
   await db.from("documents").update({ rendered_text: combined.slice(0, 200_000) }).eq("id", doc.id);
-  await setProgress(doc.id, { total: chunks.length, done: 0, phase: "extract", images: read.images.length }, chunks.length ? `Reading ${chunks.length} sheet part${chunks.length > 1 ? "s" : ""}…` : "Saving images…");
-  if (chunks.length === 0) return finalize(doc);
-  return { done: false, phase: "prepare", detail: `Found ${read.sheets.length} sheet(s), ${read.images.length} image(s)`, total: chunks.length, completed: 0 };
+  const total = parsedSheets.length + chunks.length;
+  await setProgress(doc.id, { total, done: parsedSheets.length, phase: "extract", images: read.images.length }, chunks.length ? `Reading ${chunks.length} sheet part${chunks.length > 1 ? "s" : ""}…` : parsedSheets.length ? "Checking numbers and matching…" : "Saving images…");
+  if (total === 0) return finalize(doc);
+  return { done: false, phase: "prepare", detail: `Found ${read.sheets.length} sheet(s), ${read.images.length} image(s)${parsedSheets.length ? ` — ${parsedSheets.length} read directly from the cells` : ""}`, total, completed: parsedSheets.length };
 }
 
 async function fail(docId: string, message: string) {
@@ -292,6 +317,25 @@ async function finalize(doc: Document): Promise<StepResult> {
   }
   header = header!;
 
+  // sheets read straight from the cells need no AI-value checks; they get a totals reconciliation instead
+  const parsedKeys = new Set(sheets.filter((x) => (x as unknown as { source_audit?: { parse?: unknown } }).source_audit?.parse).map((x) => x.name.split(" (part")[0]));
+  const printed = sheets.flatMap((x) => { const pr = (x as unknown as { source_audit?: { parse?: import("@/lib/ingest/boqParser").SheetPreview } }).source_audit?.parse; return pr ? [{ sheet: x.name, pr }] : []; });
+  if (printed.length > 0 && printed.length === good.length) {
+    // the document's printed total is the sum of each sheet's own closing "Total Amount…" line (never a single section/room subtotal)
+    header = { ...header, stated_total: printed.every((p) => p.pr.printedGrandTotal?.amount != null) ? printed.reduce((t, p) => t + (p.pr.printedGrandTotal!.amount as number), 0) : null };
+  }
+  for (const { sheet, pr } of printed) {
+    const tol = (n: number) => Math.max(1, Math.abs(n) * 0.005);
+    const g = pr.printedGrandTotal;
+    if (g?.amount != null && Math.abs(pr.itemsTotal - g.amount) > tol(g.amount)) {
+      issues.push({ code: "sheet_total_mismatch", severity: "warn", category: "totals", message: `"${sheet}": the printed "${g.label}" (${g.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}) differs from what its items add up to (${pr.itemsTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}). Check for stale or missing amounts.` });
+    } else if (!g || g.amount == null) {
+      issues.push({ code: "sheet_total_unavailable", severity: "info", category: "totals", message: `"${sheet}": the closing total line has no saved value, so the items could not be reconciled against it.` });
+    }
+    const off = pr.sections.filter((x) => x.printedTotal != null && Math.abs(x.itemTotal - x.printedTotal) > tol(x.printedTotal));
+    if (off.length) issues.push({ code: "section_total_mismatch", severity: "warn", category: "totals", message: `"${sheet}": ${off.length} section subtotal(s) differ from their items — ${off.slice(0, 4).map((x) => `${x.name}: printed ${Math.round(x.printedTotal!).toLocaleString("en-IN")} vs items ${Math.round(x.itemTotal).toLocaleString("en-IN")}`).join("; ")}${off.length > 4 ? " …" : ""}.` });
+  }
+
   // names the AI left empty are restored from the sheet's own name column
   {
     const texts = new Map<string, string[]>();
@@ -299,7 +343,7 @@ async function finalize(doc: Document): Promise<StepResult> {
       const key = x.name.split(" (part")[0];
       texts.set(key, [...(texts.get(key) ?? []), (x as unknown as { rendered_text?: string }).rendered_text ?? ""]);
     }
-    const restored = backfillNames(merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))), texts);
+    const restored = backfillNames(merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))).filter((e) => !parsedKeys.has(e.sheetKey)), texts);
     if (restored > 0) issues.push({ code: "names_restored", severity: "info", category: "ingest", message: `${restored} item name(s) the AI left blank were filled in from the sheet.` });
   }
 
@@ -318,7 +362,8 @@ async function finalize(doc: Document): Promise<StepResult> {
       const key = x.name.split(" (part")[0];
       texts.set(key, [...(texts.get(key) ?? []), (x as unknown as { rendered_text?: string }).rendered_text ?? ""]);
     }
-    const entries = merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] })));
+    const entries = merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))).filter((e) => !parsedKeys.has(e.sheetKey));
+    for (const k of parsedKeys) texts.delete(k);
     for (const g of missingRows(entries, texts)) {
       issues.push({ code: "rows_not_extracted", severity: "warn", category: "ingest", message: `"${g.sheet}": ${g.rows.length} row(s) that look like items have no extracted item (rows ${g.rows.slice(0, 12).join(", ")}${g.rows.length > 12 ? ` … +${g.rows.length - 12} more` : ""}). The AI may have skipped them — retry the sheet or add them by hand.` });
     }
@@ -448,9 +493,11 @@ async function finalize(doc: Document): Promise<StepResult> {
 
   // party name: document → file name hint → blank, always recorded as to how it was obtained
   const fieldMeta: Record<string, CellMeta> = {};
-  const partyName = doc.party_name ?? header.party.name;
+  const fromFile = doc.role === "bid" ? (/__([^_][^/]*?)_*\.[a-z]+$/i.exec(doc.file_name)?.[1] ?? /\(\s*([^()]{3,40}?)\s*\)[^()]*\.[a-z]+$/i.exec(doc.file_name)?.[1] ?? "").replace(/_/g, " ").trim() : "";
+  const partyName = doc.party_name ?? header.party.name ?? (fromFile || null);
   if (doc.party_name) fieldMeta.party_name = { src: "manual", note: "Entered when uploading", at: stamp };
   else if (header.party.name) fieldMeta.party_name = { src: "document", at: stamp };
+  else if (fromFile) fieldMeta.party_name = { src: "autofill", note: "Taken from the file name — please check", at: stamp };
   if (!header.currency) fieldMeta.currency = { src: "autofill", note: "Not stated in the document; using the tender's currency", at: stamp };
 
   await db

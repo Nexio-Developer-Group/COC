@@ -11,7 +11,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext<"/api/documents/[
   const { doc, lines } = bundle;
 
   const [{ data: sheets }, { data: images }, { count: editCount }, { data: versions }] = await Promise.all([
-    db.from("document_sheets").select("id, document_id, idx, name, kind, row_count, status, error, image_count").eq("document_id", id).order("idx").returns<DocumentSheet[]>(),
+    db.from("document_sheets").select("id, document_id, idx, name, kind, row_count, status, error, image_count, source_audit").eq("document_id", id).order("idx").returns<DocumentSheet[]>(),
     db.from("document_images").select("*").eq("document_id", id).order("created_at").returns<DocumentImage[]>(),
     db.from("line_item_edits").select("id", { count: "exact", head: true }).eq("document_id", id),
     db.from("documents").select("id, version_no, file_name, created_at, superseded_at, supersedes_id, status, computed_total").eq("tender_id", doc.tender_id).eq("role", doc.role).order("version_no"),

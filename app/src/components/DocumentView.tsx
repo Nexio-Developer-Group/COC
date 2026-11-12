@@ -8,6 +8,7 @@ import type { Document, DocumentImage, DocumentSheet, Issue, LineItem } from "@/
 import BoqGrid, { type TenderItemRef } from "./BoqGrid";
 import HistoryDrawer from "./HistoryDrawer";
 import { ImageViewer } from "./ImageLightbox";
+import ImportSummary from "./ImportSummary";
 import ReviewPanel from "./ReviewPanel";
 import UploadDialog from "./UploadDialog";
 import { Button, Card, ExportMenu, Menu, Modal, Pill, Spinner, statusPill } from "./ui";
@@ -106,6 +107,8 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
           <Button variant="primary" icon="check" onClick={() => setReviewOpen(true)}>Review & confirm</Button>
         </Card>
       )}
+
+      <ImportSummary sheets={sheets} currency={doc.currency ?? "INR"} />
 
       {/* header facts */}
       <Card className="p-5">
