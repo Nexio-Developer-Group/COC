@@ -9,7 +9,7 @@ import { chunkSheet, expectedItemRows, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
 import { deriveVariants } from "./variants";
 import { backfillNames } from "./backfill";
-import { auditIssues, verifyAgainstSource, type SourceFlag } from "./verify";
+import { auditIssues, missingRows, verifyAgainstSource, type SourceFlag } from "./verify";
 import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
 
@@ -318,7 +318,11 @@ async function finalize(doc: Document): Promise<StepResult> {
       const key = x.name.split(" (part")[0];
       texts.set(key, [...(texts.get(key) ?? []), (x as unknown as { rendered_text?: string }).rendered_text ?? ""]);
     }
-    const st = verifyAgainstSource(merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))), texts);
+    const entries = merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] })));
+    for (const g of missingRows(entries, texts)) {
+      issues.push({ code: "rows_not_extracted", severity: "warn", category: "ingest", message: `"${g.sheet}": ${g.rows.length} row(s) that look like items have no extracted item (rows ${g.rows.slice(0, 12).join(", ")}${g.rows.length > 12 ? ` … +${g.rows.length - 12} more` : ""}). The AI may have skipped them — retry the sheet or add them by hand.` });
+    }
+    const st = verifyAgainstSource(entries, texts);
     if (st.corrected > 0) issues.push({ code: "values_corrected_from_source", severity: "warn", category: "ingest", message: `${st.corrected} value(s) the AI read differently from the sheet were replaced with the sheet's own number (e.g. ${st.examples.join(", ")}). Each is marked on its row.` });
     if (st.unverified > 0) issues.push({ code: "values_not_in_source", severity: "warn", category: "ingest", message: `${st.unverified} value(s) could not be found in the sheet row they came from and are flagged on their rows — please check them.` });
   }

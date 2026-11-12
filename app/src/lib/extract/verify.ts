@@ -138,3 +138,26 @@ export function auditIssues(audits: { sheet: string; audit: SheetAudit }[]): Iss
   }
   return issues;
 }
+
+const looksLikeItemRow = (cells: RowCells) => {
+  const vals = Object.values(cells).filter(Boolean);
+  if (vals.length < 3) return false;
+  const numeric = vals.filter((c) => num(c) != null).length;
+  const texty = vals.filter((c) => /[A-Za-z]{3,}/.test(c)).length;
+  return numeric >= 1 && texty >= 2;
+};
+
+/** Sheet rows that look like items (text plus a number) but have no extracted item — i.e. rows the AI skipped. */
+export function missingRows(entries: { item: ExtractedItem; sheetKey: string }[], texts: Map<string, string[]>): { sheet: string; rows: number[] }[] {
+  const covered = new Map<string, Set<number>>();
+  for (const { item, sheetKey } of entries) if (item.source_row != null) covered.set(sheetKey, (covered.get(sheetKey) ?? new Set()).add(item.source_row));
+  const out: { sheet: string; rows: number[] }[] = [];
+  for (const [key, chunks] of texts) {
+    const rows = [...parseRows(chunks.join("\n")).entries()].filter(([, cells]) => looksLikeItemRow(cells)).map(([n]) => n);
+    const have = covered.get(key) ?? new Set<number>();
+    // a note row directly under an item ("Make: As per selection") carries no number of its own, so only rows that really look like items count
+    const missing = rows.filter((n) => !have.has(n));
+    if (missing.length) out.push({ sheet: key, rows: missing });
+  }
+  return out;
+}
