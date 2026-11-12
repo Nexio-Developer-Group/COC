@@ -1,3 +1,4 @@
+import { evaluateCellFormula, UnsupportedFormula } from "./cellFormula";
 import ExcelJS from "exceljs";
 import mammoth from "mammoth";
 import { extractXlsxImages, stripDrawings } from "./xlsxImages";
@@ -11,11 +12,24 @@ export type ExtractedImage = {
   anchorCol: number | null;
 };
 
+/** What the workbook itself says about its formulas and errors, checked without any AI. Lists are capped. */
+export type SheetAudit = {
+  formulaCount: number;
+  /** cached result disagrees with our own recalculation of the same formula */
+  mismatches: { a: string; f: string; cached: number; recalc: number }[];
+  /** formulas we cannot recompute (other functions, other sheets, external links) — the cached value is kept but unverified */
+  unverified: { a: string; f: string; why: string }[];
+  /** formulas saved without any cached result */
+  uncached: string[];
+  errors: { a: string; text: string }[];
+};
+
 export type SheetText = {
   name: string;
   text: string;
   rowCount: number;
   imageCount: number;
+  audit?: SheetAudit;
 };
 
 export type ReadResult = {
@@ -86,6 +100,55 @@ function cellToText(v: ExcelJS.CellValue): string {
   return String(v);
 }
 
+
+const AUDIT_CAP = 40;
+const numOf = (v: ExcelJS.CellValue): number | null => {
+  if (typeof v === "number") return v;
+  if (v && typeof v === "object" && "result" in (v as object)) return numOf((v as { result: ExcelJS.CellValue }).result);
+  return null;
+};
+
+/** Re-checks every formula in a sheet against its own cached result, using only the sheet's other cell values. */
+function auditSheet(sheet: ExcelJS.Worksheet): SheetAudit {
+  const audit: SheetAudit = { formulaCount: 0, mismatches: [], unverified: [], uncached: [], errors: [] };
+  const get = (address: string) => numOf(sheet.getCell(address).value);
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      const v = cell.value as unknown;
+      if (v && typeof v === "object" && "error" in (v as object)) {
+        if (audit.errors.length < AUDIT_CAP) audit.errors.push({ a: cell.address, text: String((v as { error: string }).error) });
+        return;
+      }
+      const isFormula = !!v && typeof v === "object" && ("formula" in (v as object) || "sharedFormula" in (v as object));
+      if (!isFormula) return;
+      audit.formulaCount++;
+      let formula = "";
+      try { formula = String(cell.formula ?? ""); } catch { formula = String((v as { formula?: string }).formula ?? ""); }
+      const result = (v as { result?: unknown }).result;
+      if (result && typeof result === "object" && "error" in (result as object)) {
+        if (audit.errors.length < AUDIT_CAP) audit.errors.push({ a: cell.address, text: String((result as { error: string }).error) });
+        return;
+      }
+      if (result === undefined || result === null) {
+        if (audit.uncached.length < AUDIT_CAP) audit.uncached.push(cell.address);
+        return;
+      }
+      const cached = typeof result === "number" ? result : null;
+      const fn = /([A-Z][A-Z0-9.]*)\(/i.exec(formula.replace(/SUM\(/gi, ""))?.[1];
+      const why = /\[\d+\]|\[.*\]/.test(formula) ? "refers to another workbook" : formula.includes("!") ? "refers to another sheet" : fn ? `uses ${fn.toUpperCase()}()` : null;
+      if (why) { if (audit.unverified.length < AUDIT_CAP) audit.unverified.push({ a: cell.address, f: formula.slice(0, 80), why }); return; }
+      if (cached === null || !formula) return;
+      try {
+        const recalc = Math.round(evaluateCellFormula(formula, get) * 1e6) / 1e6;
+        if (Math.abs(recalc - cached) >= 0.01 && audit.mismatches.length < AUDIT_CAP) audit.mismatches.push({ a: cell.address, f: formula.slice(0, 80), cached, recalc });
+      } catch (e) {
+        if (e instanceof UnsupportedFormula && audit.unverified.length < AUDIT_CAP) audit.unverified.push({ a: cell.address, f: formula.slice(0, 80), why: e.message });
+      }
+    });
+  });
+  return audit;
+}
+
 async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: ExtractedImage[] }> {
   const images = await extractXlsxImages(buffer).catch(() => [] as ExtractedImage[]);
   const wb = new ExcelJS.Workbook();
@@ -110,7 +173,7 @@ async function readXlsx(buffer: Buffer): Promise<{ sheets: SheetText[]; images: 
       if (parts.length) lines.push(`R${rowNumber} | ${parts.join(" | ")}`);
     });
     const imageCount = images.filter((i) => i.sheetName === sheet.name).length;
-    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount });
+    if (lines.length > 0 || imageCount > 0) sheets.push({ name: sheet.name, text: lines.join("\n"), rowCount: lines.length, imageCount, audit: auditSheet(sheet) });
   });
   return { sheets, images };
 }
@@ -163,8 +226,8 @@ export const CHUNK_CHARS = Number(process.env.GROQ_TPM || 8000) >= 20000 ? 14000
 const CONTEXT_ROWS_CHARS = 900;
 
 /** Splits one sheet into row-aligned chunks; later chunks get the sheet's header rows as context. */
-export function chunkSheet(sheet: SheetText): { name: string; text: string; context: string; rowCount: number; imageCount: number }[] {
-  if (sheet.text.length <= CHUNK_CHARS) return [{ name: sheet.name, text: sheet.text, context: "", rowCount: sheet.rowCount, imageCount: sheet.imageCount }];
+export function chunkSheet(sheet: SheetText): { name: string; text: string; context: string; rowCount: number; imageCount: number; audit?: SheetAudit }[] {
+  if (sheet.text.length <= CHUNK_CHARS) return [{ name: sheet.name, text: sheet.text, context: "", rowCount: sheet.rowCount, imageCount: sheet.imageCount, audit: sheet.audit }];
   const lines = sheet.text.split("\n");
   let context = "";
   const isDataRow = (l: string) => /\|\s*[A-Z]+:-?\d[\d.]*\s*(\||$)/.test(l.replace(/^R\d+ \|/, "|").replace(/^L\d+ \|/, "|")) && !/^R\d+ \| A:Sr/i.test(l);
@@ -172,12 +235,12 @@ export function chunkSheet(sheet: SheetText): { name: string; text: string; cont
     if (isDataRow(l) || context.length + l.length > CONTEXT_ROWS_CHARS) break;
     context += l + "\n";
   }
-  const chunks: { name: string; text: string; context: string; rowCount: number; imageCount: number }[] = [];
+  const chunks: { name: string; text: string; context: string; rowCount: number; imageCount: number; audit?: SheetAudit }[] = [];
   let buf: string[] = [];
   let size = 0;
   const flush = () => {
     if (!buf.length) return;
-    chunks.push({ name: sheet.name, text: buf.join("\n"), context: chunks.length === 0 ? "" : context.trim(), rowCount: buf.length, imageCount: chunks.length === 0 ? sheet.imageCount : 0 });
+    chunks.push({ name: sheet.name, text: buf.join("\n"), context: chunks.length === 0 ? "" : context.trim(), rowCount: buf.length, imageCount: chunks.length === 0 ? sheet.imageCount : 0, audit: chunks.length === 0 ? sheet.audit : undefined });
     buf = [];
     size = 0;
   };

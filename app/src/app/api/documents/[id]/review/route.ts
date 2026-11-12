@@ -18,6 +18,11 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/documents/[
 
   const patch: Record<string, unknown> = { header_extra: { ...extra, acks: [...acks] } };
   if (body.action === "confirm") {
+    // errors (an unread sheet, a formula that disagrees with its saved result, an Excel error) must be looked at first
+    const blocking = review.issues.filter((i) => i.severity === "error" && i.id && !acks.has(i.id));
+    if (blocking.length > 0) {
+      return NextResponse.json({ error: `${blocking.length} error${blocking.length > 1 ? "s" : ""} still need your attention before this can be confirmed — fix the data or mark each as “Looks fine”: ${blocking.slice(0, 2).map((i) => i.message.slice(0, 110)).join(" · ")}` }, { status: 409 });
+    }
     patch.status = "ready";
     patch.reviewed_at = new Date().toISOString();
     patch.header_extra = { ...extra, acks: review.issues.map((i) => i.id).filter(Boolean) };

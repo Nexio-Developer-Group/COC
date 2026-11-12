@@ -5,7 +5,7 @@ type RowCells = Record<string, string>;
 const NOT_NAME = /description|^sr|s\.?\s*no|image|dimension|unit|qty|quantity|rate|amount|remarks|make/i;
 
 /** "R18 | A:5 | B:Name | C:Text" -> { 18: { A: "5", B: "Name", C: "Text" } } */
-function parseRows(text: string): Map<number, RowCells> {
+export function parseRows(text: string): Map<number, RowCells> {
   const rows = new Map<number, RowCells>();
   for (const line of text.split("\n")) {
     const m = line.match(/^R(\d+) \| ([\s\S]*)$/);
@@ -21,7 +21,7 @@ function parseRows(text: string): Map<number, RowCells> {
 }
 
 /** Which column holds the item's short name / its long description, read from the sheet's header row. */
-function headerColumns(rows: Map<number, RowCells>): { nameCol?: string; descCol?: string } {
+export function headerColumns(rows: Map<number, RowCells>): { nameCol?: string; descCol?: string } {
   for (const cells of rows.values()) {
     const entries = Object.entries(cells);
     const hasDesc = entries.some(([, v]) => /description|particular/i.test(v));

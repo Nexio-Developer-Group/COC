@@ -9,6 +9,7 @@ import { chunkSheet, expectedItemRows, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
 import { deriveVariants } from "./variants";
 import { backfillNames } from "./backfill";
+import { auditIssues, verifyAgainstSource, type SourceFlag } from "./verify";
 import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
 
@@ -95,6 +96,7 @@ async function prepare(doc: Document): Promise<StepResult> {
         rendered_text: c.text,
         image_count: c.imageCount,
         raw_output: c.context ? { _context: c.context } : null,
+        source_audit: c.audit ?? null,
         status: "pending",
       }))
     );
@@ -309,6 +311,20 @@ async function finalize(doc: Document): Promise<StepResult> {
     Object.assign(variantLabels, vr.labels);
   }
 
+  // every number the AI returned is checked against the printed row; the sheet's own value wins
+  {
+    const texts = new Map<string, string[]>();
+    for (const x of sheets) {
+      const key = x.name.split(" (part")[0];
+      texts.set(key, [...(texts.get(key) ?? []), (x as unknown as { rendered_text?: string }).rendered_text ?? ""]);
+    }
+    const st = verifyAgainstSource(merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))), texts);
+    if (st.corrected > 0) issues.push({ code: "values_corrected_from_source", severity: "warn", category: "ingest", message: `${st.corrected} value(s) the AI read differently from the sheet were replaced with the sheet's own number (e.g. ${st.examples.join(", ")}). Each is marked on its row.` });
+    if (st.unverified > 0) issues.push({ code: "values_not_in_source", severity: "warn", category: "ingest", message: `${st.unverified} value(s) could not be found in the sheet row they came from and are flagged on their rows — please check them.` });
+  }
+  // what the workbook itself says about its formulas and errors (checked at upload, no AI)
+  issues.push(...auditIssues(sheets.filter((x) => (x as unknown as { source_audit?: unknown }).source_audit).map((x) => ({ sheet: x.name, audit: (x as unknown as { source_audit: import("@/lib/ingest/readFile").SheetAudit }).source_audit }))));
+
   // nameless continuation rows ("237 rmt @ 1850" under item 8) add to the line above instead of becoming strays
   for (const m of merged) {
     m.items.forEach((item, i) => {
@@ -388,6 +404,14 @@ async function finalize(doc: Document): Promise<StepResult> {
   for (const l of itemLines) {
     const t = l.tender_line_id ? tenderById.get(l.tender_line_id) : null;
     l.anomalies = checkPlausibility(l, { role: doc.role, currency: cur, unitMedian: l.unit ? uMed.get(l.unit) ?? null : null, tenderLine: t ? { quantity: t.quantity, rate: t.rate, unit: t.unit } : null, medianRate: l.tender_line_id ? medians.get(l.tender_line_id) ?? null : null });
+  }
+
+  for (const l of itemLines) {
+    const flags = ((l.attributes as Record<string, unknown>)?.source_check ?? []) as SourceFlag[];
+    for (const f of flags) {
+      if (f.corrected && (f.field === "quantity" || f.field === "rate" || f.field === "amount")) l.cell_meta[f.field] = { ...(l.cell_meta[f.field] ?? {}), src: "document", note: f.message, at: stamp } as CellMeta;
+      l.anomalies = [...(l.anomalies ?? []), { field: f.field, code: f.code, severity: f.severity, message: f.message }];
+    }
   }
 
   // ---- persist lines in bulk --------------------------------------------------------
