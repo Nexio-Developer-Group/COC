@@ -8,6 +8,7 @@ import { matchAll, type MatchCandidate } from "@/lib/match";
 import { chunkSheet, expectedItemRows, readFile } from "@/lib/ingest/readFile";
 import { storeImages, linkImagesToLines } from "@/lib/ingest/images";
 import { deriveVariants } from "./variants";
+import { backfillNames } from "./backfill";
 import { applyUnitConversion, checkPlausibility, recompute, unitMedians } from "@/lib/calc";
 import type { CellMeta, Document, DocumentSheet, Issue, LineItem, Price } from "@/lib/types";
 
@@ -289,6 +290,17 @@ async function finalize(doc: Document): Promise<StepResult> {
   }
   header = header!;
 
+  // names the AI left empty are restored from the sheet's own name column
+  {
+    const texts = new Map<string, string[]>();
+    for (const x of sheets) {
+      const key = x.name.split(" (part")[0];
+      texts.set(key, [...(texts.get(key) ?? []), (x as unknown as { rendered_text?: string }).rendered_text ?? ""]);
+    }
+    const restored = backfillNames(merged.flatMap((m) => m.items.map((item) => ({ item, sheetKey: (itemSheet.get(item) ?? m.sheet).split(" (part")[0] }))), texts);
+    if (restored > 0) issues.push({ code: "names_restored", severity: "info", category: "ingest", message: `${restored} item name(s) the AI left blank were filled in from the sheet.` });
+  }
+
   // price options straight from the cells (rate columns paired with the amount that equals qty x rate)
   const sheetText = new Map(sheets.map((x) => [x.name, (x as unknown as { rendered_text?: string }).rendered_text ?? ""]));
   const vr = deriveVariants(merged.flatMap((m) => m.items.map((item) => ({ item, sheetText: sheetText.get(itemSheet.get(item) ?? m.sheet) ?? "" }))));
@@ -332,7 +344,7 @@ async function finalize(doc: Document): Promise<StepResult> {
     lines.push({
       id: sectionId, document_id: doc.id, parent_id: null, kind: "section", position: pos, item_code: String(si + 1), source_ref: sec.source_ref, name: sec.name,
       description: null, trade: sec.trade, unit_raw: null, unit: null, quantity: null, rate: null, amount: null, prices: [], quote_status: null, flags: [], remarks: null,
-      attributes: {}, extraction_confidence: null, cell_meta: { trade: { src: "ai", note: "Trade category was inferred by AI", at: stamp } }, anomalies: [], converted: null, sheet_name: sec.sheet, source_row: null, edited_at: null,
+      attributes: {}, extraction_confidence: null, cell_meta: { trade: { src: "ai", note: "Trade category was inferred by AI", at: stamp } }, anomalies: [], converted: null, sheet_name: sec.sheet.split(" (part")[0], source_row: null, edited_at: null,
       tender_line_id: null, match_method: null, match_confidence: null, match_note: null,
     });
     sec.items.forEach((item, ii) => {
@@ -355,7 +367,7 @@ async function finalize(doc: Document): Promise<StepResult> {
         id: crypto.randomUUID(), document_id: doc.id, parent_id: sectionId, kind: "item", position: pos, item_code: `${si + 1}.${ii + 1}`, source_ref: item.source_ref, name: item.name,
         description: item.description, trade: null, unit_raw: item.unit, unit: normalizeUnit(item.unit), quantity: item.quantity, rate: primary?.rate ?? null, amount: primary?.amount ?? null,
         prices: item.prices, quote_status: item.quote_status, flags: item.flags, remarks: item.remarks, attributes: item.attributes ?? {}, extraction_confidence: "high",
-        cell_meta: {}, anomalies: [], converted: null, sheet_name: sec.sheet, source_row: item.source_row ?? null, edited_at: null,
+        cell_meta: {}, anomalies: [], converted: null, sheet_name: sec.sheet.split(" (part")[0], source_row: item.source_row ?? null, edited_at: null,
         tender_line_id: tenderLineId, match_method: mm, match_confidence: mc, match_note: mn,
       });
     });
