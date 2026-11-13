@@ -177,6 +177,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
           </thead>
           <tbody>{rows}</tbody>
           <tfoot>
+            {multiSheet && activeSheet !== "all" && <Foot label={`This sheet only — ${activeSheet}`} strong bids={bids} lead={lead} f={(b) => formatINR(sheetStats(activeSheet).totals[b.documentId], cur)} hint="Total of the items each bid priced on the selected sheet" />}
             {reqOn && <Foot label="Requirement total (same items)" bids={bids} lead={lead} f={(b) => (b.req.comparableItems ? formatINR(b.req.reqAmount, cur) : "—")} hint="The tender's own amount for exactly the items this contractor priced" />}
             {reqOn && <Foot label="Bid vs requirement" strong bids={bids} lead={lead} f={(b) => (b.req.variancePct == null ? "—" : `${b.req.variancePct > 0 ? "+" : ""}${(b.req.variancePct * 100).toFixed(1)}%  (${formatINR(b.req.bidAmount - b.req.reqAmount, cur)})`)} hint="Over those items: positive = dearer than the requirement" />}
             {reqOn && <Foot label="Items above / on / below requirement" bids={bids} lead={lead} f={(b) => `${b.req.over} / ${b.req.within} / ${b.req.under}`} hint={`"On" = within ±${REQ_TOLERANCE * 100}% of the requirement rate`} />}
@@ -184,7 +185,7 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
             <Foot label="Quoted total (as printed)" bids={bids} lead={lead} f={(b) => formatINR(b.statedTotal, cur)} />
             <Foot label="Like-for-like total" strong bids={bids} lead={lead} f={(b) => formatINR(b.likeForLikeTotal, cur)} hint="Only items every contractor priced — fair to compare" />
             <Foot label="…over how many items" bids={bids} lead={lead} f={(b) => (b.likeForLikeItems ? `${b.likeForLikeItems} items` : "all priced items")} />
-            <Foot label="Everything this bid priced" bids={bids} lead={lead} f={(b) => formatINR(b.pricedTotal, cur)} />
+            <Foot label={multiSheet ? "Everything this bid priced (all sheets)" : "Everything this bid priced"} bids={bids} lead={lead} f={(b) => formatINR(b.pricedTotal, cur)} />
             <Foot label="Rank" bids={bids} lead={lead} f={(b) => `L${b.rank}`} />
             <Foot label="Not priced / missing" bids={bids} lead={lead} f={(b) => `${b.notPricedCount} / ${b.missingCount}`} />
             <Foot label="Tax" bids={bids} lead={lead} f={(b) => (b.taxBasis && b.taxBasis !== "unknown" ? `${b.taxBasis}${b.taxRatePercent ? ` · ${b.taxRatePercent}%` : ""}` : "not stated")} />

@@ -27,6 +27,8 @@ type Props = {
   readOnly?: boolean;
   /** show which workbook sheet each category came from (when several sheets are listed together) */
   showSheet?: boolean;
+  /** closing line of the table: the total across every sheet of the workbook (set when the workbook has several sheets) */
+  grandTotal?: { amount: number; items: number; sheets: number; viewing: string | null };
   focusId?: string | null;
   onChanged: () => void;
 };
@@ -36,7 +38,7 @@ type EditTarget = { id: string; field: string } | null;
 
 const NUM_FIELDS: NumField[] = ["quantity", "rate", "amount"];
 
-export default function BoqGrid({ documentId, tenderId, role, currency, sections, items, imageCounts, tenderItems, readOnly, showSheet, focusId, onChanged }: Props) {
+export default function BoqGrid({ documentId, tenderId, role, currency, sections, items, imageCounts, tenderItems, readOnly, showSheet, grandTotal, focusId, onChanged }: Props) {
   const toast = useToast();
   const [editing, setEditing] = useState<EditTarget>(null);
   const [draft, setDraft] = useState("");
@@ -424,6 +426,15 @@ export default function BoqGrid({ documentId, tenderId, role, currency, sections
               );
             })}
           </tbody>
+          {grandTotal && (
+            <tfoot>
+              <tr className="bg-brand-dark text-white">
+                <td colSpan={cols - 2} className="px-3 py-3"><span className="text-base font-semibold">Total — all {grandTotal.sheets} sheets</span><span className="ml-3 text-xs opacity-70">{grandTotal.items} items{grandTotal.viewing ? ` · you are viewing only “${grandTotal.viewing}”` : ""}</span></td>
+                <td colSpan={2} className="px-3 py-3 text-right tabular-nums text-base font-semibold">{formatINR(grandTotal.amount, currency)}</td>
+                <td />
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
       {busy && <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-brand-dark text-white text-xs px-3 py-1.5 rounded-full shadow-lg">Saving…</div>}

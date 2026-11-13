@@ -88,6 +88,8 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
   const shownSections = activeSheet === "all" ? sections : sections.filter((sec) => (sec.sheet_name ?? "").trim() === activeSheet);
   const shownIds = new Set(shownSections.map((sec) => sec.id));
   const shownItems = activeSheet === "all" ? items : items.filter((i) => i.parent_id && shownIds.has(i.parent_id));
+  const sheetTotal = (n: string) => { const ids = new Set(sections.filter((sec) => (sec.sheet_name ?? "").trim() === n).map((sec) => sec.id)); return items.filter((i) => i.parent_id && ids.has(i.parent_id)).reduce((t, i) => t + (Number(i.amount) || 0), 0); };
+  const allTotal = items.reduce((t, i) => t + (Number(i.amount) || 0), 0);
   const countFor = (n: string) => { const ids = new Set(sections.filter((sec) => (sec.sheet_name ?? "").trim() === n).map((sec) => sec.id)); return items.filter((i) => i.parent_id && ids.has(i.parent_id)).length; };
 
   return (
@@ -208,7 +210,20 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
             ))}
           </div>
         )}
+        {multiSheet && (
+          <div className="rounded-xl border border-line bg-white px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            {sheetNames.map((n, i) => (
+              <span key={n} className="inline-flex items-center gap-3">
+                {i > 0 && <span className="text-brand-dark/40">+</span>}
+                <span className={activeSheet === n ? "font-semibold" : ""}><span className="text-brand-dark/55">{n}</span> <span className="tabular-nums">{formatINR(sheetTotal(n), currency)}</span></span>
+              </span>
+            ))}
+            <span className="text-brand-dark/40">=</span>
+            <span className="font-semibold">All sheets <span className="tabular-nums">{formatINR(allTotal, currency)}</span></span>
+          </div>
+        )}
         <BoqGrid
+          grandTotal={multiSheet ? { amount: allTotal, items: items.length, sheets: sheetNames.length, viewing: activeSheet === "all" ? null : activeSheet } : undefined}
           showSheet={multiSheet && activeSheet === "all"}
           documentId={documentId}
           tenderId={tenderId}
