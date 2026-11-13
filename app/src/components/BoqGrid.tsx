@@ -297,16 +297,33 @@ export default function BoqGrid({ documentId, tenderId, role, currency, sections
             </tr>
           </thead>
           <tbody>
-            {sections.map((section) => {
+            {sections.map((section, si) => {
+              const sheetOf = (x: LineItem | undefined) => (x?.sheet_name ?? "").trim();
+              const newSheet = !!showSheet && sheetOf(section) !== "" && (si === 0 || sheetOf(sections[si - 1]) !== sheetOf(section));
+              const sheetSecs = newSheet ? sections.filter((x) => sheetOf(x) === sheetOf(section)) : [];
+              const sheetItems = sheetSecs.reduce((n, x) => n + (itemsBySection.get(x.id)?.length ?? 0), 0);
+              const sheetTotal = sheetSecs.reduce((t, x) => t + (itemsBySection.get(x.id) ?? []).reduce((a, l) => a + (Number(l.amount) || 0), 0), 0);
               const list = itemsBySection.get(section.id) ?? [];
               const subtotal = list.reduce((s, l) => s + (Number(l.amount) || 0), 0);
               return (
                 <Fragment key={section.id}>
+                  {newSheet && (
+                    <>
+                      {si > 0 && <tr aria-hidden><td colSpan={cols} className="h-6 bg-brand-light" /></tr>}
+                      <tr className="bg-brand-dark text-white">
+                        <td colSpan={cols - 2} className="px-3 py-3">
+                          <span className="inline-flex items-center gap-2 text-base font-semibold"><Icon name="file" className="w-4 h-4 opacity-80" />{sheetOf(section)}</span>
+                          <span className="ml-3 text-xs opacity-70">Excel sheet · {sheetSecs.length} categor{sheetSecs.length === 1 ? "y" : "ies"} · {sheetItems} items</span>
+                        </td>
+                        <td colSpan={2} className="px-3 py-3 text-right tabular-nums font-semibold">{formatINR(sheetTotal, currency)}</td>
+                        <td />
+                      </tr>
+                    </>
+                  )}
                   <tr className="bg-brand-accent text-white">
                     <td className="px-3 py-2 font-semibold" colSpan={cols - 2}>
                       <span className="opacity-70 mr-2">{section.item_code}</span>
                       {section.name ?? "General"}
-                      {showSheet && section.sheet_name && <span className="ml-2 align-middle text-[10px] font-normal bg-white/20 rounded px-1.5 py-0.5" title="Sheet in your Excel file">📄 {section.sheet_name.trim()}</span>}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium" colSpan={2}>{formatINR(subtotal, currency)}</td>
                     <td />

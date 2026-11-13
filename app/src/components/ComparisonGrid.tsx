@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { formatINR, formatQty } from "@/lib/format";
 import { REQ_TOLERANCE, type Comparison, type ComparisonCell } from "@/lib/compare";
 import { Pill } from "./ui";
@@ -25,22 +25,51 @@ function cellStyle(c: ComparisonCell | undefined, isMin: boolean, isMax: boolean
 export default function ComparisonGrid({ comparison, tenderId }: { comparison: Comparison; tenderId: string }) {
   const [mode, setMode] = useState<Mode>("rates");
   const [section, setSection] = useState<string>("all");
+  const [sheet, setSheet] = useState<string>("all");
+  const sheetOf = (i: { sheetName: string | null }) => (i.sheetName ?? "").trim();
+  const sheetNames = useMemo(() => { const seen: string[] = []; for (const i of comparison.items) { const n = sheetOf(i); if (n && !seen.includes(n)) seen.push(n); } return seen; }, [comparison.items]);
+  const multiSheet = sheetNames.length > 1;
+  const activeSheet = multiSheet && sheetNames.includes(sheet) ? sheet : "all";
+  const secKey = (i: { sheetName: string | null; sectionName: string | null }) => `${sheetOf(i)}||${i.sectionName ?? "General"}`;
   const hasReq = comparison.requirementPricedItems > 0;
   const [showReq, setShowReq] = useState(true);
   const reqOn = hasReq && showReq;
   const lead = reqOn ? 5 : 4;
   const bids = useMemo(() => [...comparison.bids].sort((a, b) => a.rank - b.rank), [comparison.bids]);
-  const sections = comparison.sections;
-  const items = comparison.items.filter((i) => section === "all" || (i.sectionName ?? "General") === section);
+  // categories keyed by sheet + name (the same category name can exist on several sheets)
+  const sections = useMemo(() => { const seen = new Map<string, { key: string; name: string; sheet: string }>(); for (const i of comparison.items) if (activeSheet === "all" || sheetOf(i) === activeSheet) if (!seen.has(secKey(i))) seen.set(secKey(i), { key: secKey(i), name: i.sectionName ?? "General", sheet: sheetOf(i) }); return [...seen.values()]; }, [comparison.items, activeSheet]);
+  const items = comparison.items.filter((i) => (activeSheet === "all" || sheetOf(i) === activeSheet) && (section === "all" || secKey(i) === section));
   const cur = comparison.currency;
 
   const rows: React.ReactNode[] = [];
-  let lastSection: string | null | undefined;
+  let lastSection: string | undefined;
+  let lastSheet: string | undefined;
+  const sheetStats = (n: string) => {
+    const its = comparison.items.filter((i) => sheetOf(i) === n);
+    const secs = new Set(its.map((i) => secKey(i)));
+    const totals = Object.fromEntries(bids.map((b) => [b.documentId, its.reduce((t, i) => { const c = i.cells[b.documentId]; return t + (c?.status === "priced" ? c.amount ?? 0 : 0); }, 0)]));
+    return { count: its.length, secs: secs.size, req: its.reduce((t, i) => t + (i.tenderAmount ?? 0), 0), totals };
+  };
   for (const item of items) {
-    if (item.sectionName !== lastSection) {
-      lastSection = item.sectionName;
+    if (multiSheet && activeSheet === "all" && sheetOf(item) !== lastSheet) {
+      const st = sheetStats(sheetOf(item));
       rows.push(
-        <tr key={`s-${item.itemCode}`} className="bg-brand-accent text-white">
+        <Fragment key={`sheet-${sheetOf(item)}`}>
+          {lastSheet !== undefined && <tr aria-hidden><td colSpan={lead + bids.length + 1} className="h-6 bg-brand-light" /></tr>}
+          <tr className="bg-brand-dark text-white">
+            <td colSpan={lead} className="p-0"><div className="sticky left-0 w-max px-3 py-3"><span className="inline-flex items-center gap-2 text-base font-semibold"><Icon name="file" className="w-4 h-4 opacity-80" />{sheetOf(item)}</span><span className="ml-3 text-xs opacity-70">Excel sheet · {st.secs} categories · {st.count} items{reqOn ? ` · requirement ${formatINR(st.req, cur)}` : ""}</span></div></td>
+            {bids.map((b) => <td key={b.documentId} className="px-3 py-3 text-right tabular-nums font-semibold" title={`${b.partyName ?? "Bid"} — total of the items it priced on this sheet`}>{formatINR(st.totals[b.documentId], cur)}</td>)}
+            <td />
+          </tr>
+        </Fragment>
+      );
+      lastSheet = sheetOf(item);
+      lastSection = undefined;
+    }
+    if (secKey(item) !== lastSection) {
+      lastSection = secKey(item);
+      rows.push(
+        <tr key={`s-${item.tenderLineId}`} className="bg-brand-accent text-white">
           <td colSpan={lead + bids.length + 1} className="p-0 font-semibold"><div className="sticky left-0 w-max max-w-[100vw] px-3 py-2">{item.sectionName ?? "General"}</div></td>
         </tr>
       );
@@ -98,9 +127,20 @@ export default function ComparisonGrid({ comparison, tenderId }: { comparison: C
             <input type="checkbox" checked={showReq} onChange={(e) => setShowReq(e.target.checked)} className="accent-[var(--brand-primary,#2563eb)]" /> Measure against requirement
           </label>
         )}
+        {multiSheet && (
+          <div className="flex flex-wrap items-center gap-1.5 w-full" role="tablist" aria-label="Sheets in this workbook">
+            <span className="text-xs text-brand-dark/50 mr-1">Sheet:</span>
+            {["all", ...sheetNames].map((n) => (
+              <button key={n} role="tab" aria-selected={activeSheet === n} onClick={() => { setSheet(n); setSection("all"); }}
+                className={`text-xs rounded-full border px-3 py-1.5 ${activeSheet === n ? "bg-brand-dark text-white border-brand-dark" : "bg-white border-line text-brand-dark/70 hover:bg-black/5"}`}>
+                {n === "all" ? `All sheets (${comparison.items.length})` : `${n} (${comparison.items.filter((i) => sheetOf(i) === n).length})`}
+              </button>
+            ))}
+          </div>
+        )}
         <select value={section} onChange={(e) => setSection(e.target.value)} className="text-sm border border-line rounded-lg px-3 py-2 bg-white">
           <option value="all">All sections</option>
-          {sections.map((s) => <option key={s.name ?? "General"} value={s.name ?? "General"}>{s.name ?? "General"}</option>)}
+          {sections.map((s) => <option key={s.key} value={s.key}>{s.name}{multiSheet && activeSheet === "all" ? ` — ${s.sheet}` : ""}</option>)}
         </select>
         <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-brand-dark/55">
           <span className="inline-flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded cell-low border border-black/10" />lowest</span>
