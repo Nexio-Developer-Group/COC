@@ -66,6 +66,13 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
   }
 
   const unresolved = useMemo(() => (data?.review.issues ?? []).filter((i) => !i.resolved), [data]);
+  // sheets of the workbook that categories came from (in file order); only offered when there is more than one
+  const [sheetFilter, setSheetFilter] = useState("all");
+  const sheetNames = useMemo(() => {
+    const seen: string[] = [];
+    for (const sec of data?.sections ?? []) { const n = (sec.sheet_name ?? "").trim(); if (n && !seen.includes(n)) seen.push(n); }
+    return seen;
+  }, [data]);
   if (isLoading && !data) return <div className="py-20 text-center text-brand-dark/50"><Spinner className="w-6 h-6" /></div>;
   if (!data) return null;
   const { document: doc, sections, items, images, imageCounts, sheets, versions } = data;
@@ -76,6 +83,12 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
   const currency = doc.currency ?? "INR";
   const mismatch = doc.stated_total != null && doc.computed_total != null && Math.abs(Number(doc.computed_total) - Number(doc.stated_total)) / Math.max(Number(doc.stated_total), 1) > 0.005;
   const variants = doc.price_variants ?? [];
+  const multiSheet = sheetNames.length > 1;
+  const activeSheet = multiSheet && sheetNames.includes(sheetFilter) ? sheetFilter : "all";
+  const shownSections = activeSheet === "all" ? sections : sections.filter((sec) => (sec.sheet_name ?? "").trim() === activeSheet);
+  const shownIds = new Set(shownSections.map((sec) => sec.id));
+  const shownItems = activeSheet === "all" ? items : items.filter((i) => i.parent_id && shownIds.has(i.parent_id));
+  const countFor = (n: string) => { const ids = new Set(sections.filter((sec) => (sec.sheet_name ?? "").trim() === n).map((sec) => sec.id)); return items.filter((i) => i.parent_id && ids.has(i.parent_id)).length; };
 
   return (
     <div className="space-y-4">
@@ -183,19 +196,33 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
       {sections.length === 0 && !processing ? (
         <Card className="p-8 text-center text-sm text-brand-dark/55">No rows were found in this document.</Card>
       ) : (
+        <>
+        {multiSheet && (
+          <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Sheets in this workbook">
+            <span className="text-xs text-brand-dark/50 mr-1">Sheet:</span>
+            {["all", ...sheetNames].map((n) => (
+              <button key={n} role="tab" aria-selected={activeSheet === n} onClick={() => setSheetFilter(n)}
+                className={`text-xs rounded-full border px-3 py-1.5 ${activeSheet === n ? "bg-brand-dark text-white border-brand-dark" : "bg-white border-line text-brand-dark/70 hover:bg-black/5"}`}>
+                {n === "all" ? `All sheets (${items.length})` : `${n} (${countFor(n)})`}
+              </button>
+            ))}
+          </div>
+        )}
         <BoqGrid
+          showSheet={multiSheet && activeSheet === "all"}
           documentId={documentId}
           tenderId={tenderId}
           role={role}
           currency={currency}
-          sections={sections}
-          items={items}
+          sections={shownSections}
+          items={shownItems}
           imageCounts={imageCounts}
           tenderItems={role === "bid" ? tenderItems : undefined}
           readOnly={!isCurrent || processing}
           focusId={focusId}
           onChanged={changed}
         />
+        </>
       )}
 
       {/* terms */}
@@ -215,7 +242,7 @@ export default function DocumentView({ tenderId, documentId, role }: { tenderId:
       )}
       {view !== null && <ImageViewer images={images.map((i) => ({ public_url: i.public_url, caption: i.caption, label: i.sheet_name ?? "" }))} index={view} onClose={() => setView(null)} onIndex={setView} />}
 
-      <ReviewPanel documentId={documentId} issues={data.review.issues} status={doc.status} open={reviewOpen} onClose={() => setReviewOpen(false)} onChanged={changed} onJump={(id) => { setFocusId(id); setTimeout(() => setFocusId(null), 2000); }} onRetryFailed={() => retry(true)} />
+      <ReviewPanel documentId={documentId} issues={data.review.issues} status={doc.status} open={reviewOpen} onClose={() => setReviewOpen(false)} onChanged={changed} onJump={(id) => { setSheetFilter("all"); setFocusId(id); setTimeout(() => setFocusId(null), 2000); }} onRetryFailed={() => retry(true)} />
       <HistoryDrawer documentId={documentId} lineId={null} open={historyOpen} onClose={() => setHistoryOpen(false)} onReverted={changed} />
       {role === "bid" && (
         <UploadDialog tenderId={tenderId} role="bid" open={uploadOpen} onClose={() => setUploadOpen(false)} replace={{ id: documentId, partyName: doc.party_name }} onDone={() => { refresh(`/api/tenders/${tenderId}`, "/documents"); }} />

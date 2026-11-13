@@ -25,6 +25,8 @@ type Props = {
   imageCounts: Record<string, number>;
   tenderItems?: TenderItemRef[];
   readOnly?: boolean;
+  /** show which workbook sheet each category came from (when several sheets are listed together) */
+  showSheet?: boolean;
   focusId?: string | null;
   onChanged: () => void;
 };
@@ -34,7 +36,7 @@ type EditTarget = { id: string; field: string } | null;
 
 const NUM_FIELDS: NumField[] = ["quantity", "rate", "amount"];
 
-export default function BoqGrid({ documentId, tenderId, role, currency, sections, items, imageCounts, tenderItems, readOnly, focusId, onChanged }: Props) {
+export default function BoqGrid({ documentId, tenderId, role, currency, sections, items, imageCounts, tenderItems, readOnly, showSheet, focusId, onChanged }: Props) {
   const toast = useToast();
   const [editing, setEditing] = useState<EditTarget>(null);
   const [draft, setDraft] = useState("");
@@ -304,6 +306,7 @@ export default function BoqGrid({ documentId, tenderId, role, currency, sections
                     <td className="px-3 py-2 font-semibold" colSpan={cols - 2}>
                       <span className="opacity-70 mr-2">{section.item_code}</span>
                       {section.name ?? "General"}
+                      {showSheet && section.sheet_name && <span className="ml-2 align-middle text-[10px] font-normal bg-white/20 rounded px-1.5 py-0.5" title="Sheet in your Excel file">📄 {section.sheet_name.trim()}</span>}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium" colSpan={2}>{formatINR(subtotal, currency)}</td>
                     <td />
